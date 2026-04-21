@@ -1,23 +1,35 @@
 import 'package:flutter/foundation.dart';
+// ייבוא כלים בסיסיים כמו @immutable ו-listEquals
 
 @immutable
-class Detection { // מחלקה שייצגת זיהוי אחד
-  final String tag; // שם
-  final double confidence; // כמה המודל בטוח בזיהוי
-  final List<double> box; // [left, top, right, bottom, conf?] מיקום במסך
-  final double riskScore; // ציון הסיכון
+class Detection {
+  // מחלקה שמייצגת אובייקט שזוהה (Immutable = לא משתנה אחרי יצירה)
 
-  // יוצר אובייקט detection
-  const Detection({
+  final String tag;
+  // שם האובייקט (למשל: car, person)
+
+  final double confidence;
+  // רמת ביטחון של המודל (בין 0 ל-1)
+
+  final List<double> box;
+  // מיקום האובייקט: [left, top, right, bottom]
+
+  final double riskScore;
+  // ציון סיכון (מחושב בנפרד)
+
+  Detection({
     required this.tag,
     required this.confidence,
-    required this.box,
-    this.riskScore = 0.0, // בשלב הראשון המודל מחזיר זיהוי בלי risk score אז מאתחלים לאפס
-  });
+    required List<double> box,
+    this.riskScore = 0.0,
+    // אם לא נשלח ערך → ברירת מחדל 0
+  })  : assert(box.length == 4, 'Box must have exactly 4 values: [left, top, right, bottom]'),
+  // בודק שהרשימה באורך 4
 
-  // בגלל ש detection לא ניתן לשינוי יוצרים את האובייקט הזה כדי לעדכן את risk score - יוצרת עותק חדש עם הערכים המעודכנים
-  // בגלל שהזיהוי רץ בכמה קבצים יותר בטיחותי לעשות ככה
-  // בפועל - נוצר אובייקט חדש, אבל משתמשים רק בחדש במקום בישן אז זה כמו החלפה
+        box = List.unmodifiable(box);
+  // הופך את הרשימה ללא ניתנת לשינוי (Immutable)
+
+  // יוצר עותק של האובייקט עם שינויים
   Detection copyWith({
     String? tag,
     double? confidence,
@@ -26,17 +38,56 @@ class Detection { // מחלקה שייצגת זיהוי אחד
   }) {
     return Detection(
       tag: tag ?? this.tag,
+      // אם לא נשלח tag → נשאר הישן
+
       confidence: confidence ?? this.confidence,
+      // אותו דבר ל-confidence
+
       box: box ?? this.box,
+      // אם לא נשלח box → נשאר אותו דבר
+
       riskScore: riskScore ?? this.riskScore,
+      // עדכון riskScore אם רוצים
     );
   }
 
+  // חישובים גיאומטריים מה-box
 
-// 0 שמאלה, 1 למעלה, 2 ימינה, 3 למטה, 4 רמת ביטחון בזיהוי
   double get width => (box[2] - box[0]).abs();
+  // רוחב = right - left
+
   double get height => (box[3] - box[1]).abs();
+  // גובה = bottom - top
+
   double get centerX => (box[0] + box[2]) / 2;
+  // מרכז X
+
   double get centerY => (box[1] + box[3]) / 2;
+  // מרכז Y
+
   double get area => width * height;
+  // שטח האובייקט
+
+  // השוואה בין שני אובייקטים
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+          // אם זה אותו אובייקט בזיכרון
+
+          other is Detection &&
+              // בודק שזה אותו סוג
+
+              tag == other.tag &&
+              confidence == other.confidence &&
+              riskScore == other.riskScore &&
+              listEquals(box, other.box);
+  // משווה גם את הרשימה (List)
+
+  @override
+  int get hashCode =>
+      tag.hashCode ^
+      confidence.hashCode ^
+      riskScore.hashCode ^
+      Object.hashAll(box);
+// יוצר מזהה ייחודי לאובייקט
 }
