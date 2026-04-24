@@ -17,15 +17,19 @@ class Detection {
   final double riskScore;
   // ציון סיכון (מחושב בנפרד)
 
+  final bool isApproaching;
+  // האם האובייקט מתקרב למשתמש
+
   Detection({
     required this.tag,
     required this.confidence,
     required List<double> box,
     this.riskScore = 0.0,
     // אם לא נשלח ערך → ברירת מחדל 0
+    this.isApproaching = false,
+    // אם לא נשלח ערך → ברירת מחדל false
   })  : assert(box.length == 4, 'Box must have exactly 4 values: [left, top, right, bottom]'),
   // בודק שהרשימה באורך 4
-
         box = List.unmodifiable(box);
   // הופך את הרשימה ללא ניתנת לשינוי (Immutable)
 
@@ -35,6 +39,7 @@ class Detection {
     double? confidence,
     List<double>? box,
     double? riskScore,
+    bool? isApproaching,
   }) {
     return Detection(
       tag: tag ?? this.tag,
@@ -48,6 +53,9 @@ class Detection {
 
       riskScore: riskScore ?? this.riskScore,
       // עדכון riskScore אם רוצים
+
+      isApproaching: isApproaching ?? this.isApproaching,
+      // עדכון מצב התקרבות אם רוצים
     );
   }
 
@@ -73,13 +81,12 @@ class Detection {
   bool operator ==(Object other) =>
       identical(this, other) ||
           // אם זה אותו אובייקט בזיכרון
-
           other is Detection &&
               // בודק שזה אותו סוג
-
               tag == other.tag &&
               confidence == other.confidence &&
               riskScore == other.riskScore &&
+              isApproaching == other.isApproaching &&
               listEquals(box, other.box);
   // משווה גם את הרשימה (List)
 
@@ -88,6 +95,7 @@ class Detection {
       tag.hashCode ^
       confidence.hashCode ^
       riskScore.hashCode ^
+      isApproaching.hashCode ^
       Object.hashAll(box);
 // יוצר מזהה ייחודי לאובייקט
 }

@@ -195,10 +195,55 @@ class AlertService {
   String _localizedLabel(String tag) {
     if (_language.startsWith('he')) {
       switch (tag) {
+      // רכבים
+        case 'car': return 'מכונית';
+        case 'bus': return 'אוטובוס';
+        case 'truck': return 'משאית';
+        case 'train': return 'רכבת';
+        case 'motorcycle': return 'אופנוע';
+
+      // אנשים ותחבורה קלה
         case 'person': return 'אדם';
-        case 'car': return 'רכב';
+        case 'bicycle': return 'אופניים';
+        case 'skateboard': return 'סקייטבורד';
+
+      // תמרורים ותשתית
+        case 'traffic light': return 'רמזור';
+        case 'stop sign': return 'תמרור עצור';
+        case 'fire hydrant': return 'ברז כיבוי אש';
+
+      // בעלי חיים
         case 'dog': return 'כלב';
-      // ועוד...
+        case 'cat': return 'חתול';
+        case 'horse': return 'סוס';
+        case 'sheep': return 'כבשה';
+        case 'cow': return 'פרה';
+        case 'elephant': return 'פיל';
+        case 'bear': return 'דוב';
+        case 'zebra': return 'זברה';
+        case 'giraffe': return 'ג\'ירפה';
+        case 'bird': return 'ציפור';
+
+      // ריהוט
+        case 'bench': return 'ספסל';
+        case 'chair': return 'כיסא';
+        case 'couch': return 'ספה';
+        case 'bed': return 'מיטה';
+        case 'dining table': return 'שולחן אוכל';
+        case 'potted plant': return 'עציץ';
+
+      // אביזרים
+        case 'backpack': return 'תיק גב';
+        case 'handbag': return 'תיק יד';
+        case 'suitcase': return 'מזוודה';
+        case 'umbrella': return 'מטרייה';
+
+      // ציוד ספורט
+        case 'skis': return 'מגלשיים';
+        case 'sports ball': return 'כדור';
+        case 'surfboard': return 'גלשן';
+        case 'tennis racket': return 'מחבט טניס';
+
         default: return tag;
       }
     }
