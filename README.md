@@ -6,16 +6,6 @@
 ### אפליקציית AI חכמה לעיוורים ולקויי ראייה  
 ### לזיהוי מכשולים בזמן אמת באמצעות Flutter ו־YOLOv8
 
-<br>
-
-![Flutter](https://img.shields.io/badge/Flutter-02569B?style=for-the-badge&logo=flutter&logoColor=white)
-![Dart](https://img.shields.io/badge/Dart-0175C2?style=for-the-badge&logo=dart&logoColor=white)
-![YOLOv8](https://img.shields.io/badge/YOLOv8-AI-orange?style=for-the-badge)
-![TFLite](https://img.shields.io/badge/TensorFlow-Lite-FF6F00?style=for-the-badge&logo=tensorflow)
-![Android](https://img.shields.io/badge/Android-Mobile-green?style=for-the-badge&logo=android)
-
-</div>
-
 ---
 
 # 📖 אודות הפרויקט
