@@ -57,10 +57,7 @@ class RiskScoringService {
               (changeRateFactor * 0.07) +
               (velocityFactor * 0.03);
 
-      // -------------------------------
-      // 🔥 חידוש: בדיקה האם האובייקט מתקרב
-      // -------------------------------
-
+      //  בדיקה האם האובייקט מתקרב
       final bool isApproaching =
           changeRateFactor >= 3 || velocityFactor >= 3;
       // סף נמוך יותר = מזהה התקרבות מוקדם יותר
@@ -82,7 +79,7 @@ class RiskScoringService {
 
       return detection.copyWith(
         riskScore: smoothedScore.clamp(0.0, 100.0),
-        isApproaching: isApproaching, // 👈 חדש
+        isApproaching: isApproaching,
       );
 
     } catch (e) {

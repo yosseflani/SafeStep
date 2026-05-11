@@ -1,199 +1,385 @@
+import 'dart:async';
+// ייבוא כלים לניהול זמן ו-streams אסינכרוניים
+
+import 'dart:io';
+// ייבוא כלים לעבודה עם קבצים ותיקיות
+
+import 'dart:typed_data';
+// ייבוא Float32List לצורך המרת אודיו לפורמט שהמודל מבין
+
 import 'package:flutter/foundation.dart';
-// ייבוא כלים בסיסיים של Flutter
 // kDebugMode = האם האפליקציה רצה במצב debug
 // debugPrint = הדפסה נוחה ללוגים
 
-import 'package:speech_to_text/speech_to_text.dart';
-// ייבוא הספרייה לזיהוי דיבור
+import 'package:flutter/services.dart';
+// rootBundle = גישה לקבצים שנמצאים בתיקיית assets של הפרויקט
+
+import 'package:path_provider/path_provider.dart';
+// גישה לתיקיות מקומיות במכשיר כמו documents ו-temp
+
+import 'package:record/record.dart';
+// ספריית הקלטת אודיו מהמיקרופון
+
+import 'package:sherpa_onnx/sherpa_onnx.dart';
+// ספריית זיהוי דיבור offline באמצעות sherpa-onnx
+// כאן אנחנו משתמשים במודל Whisper מקומי
+// כלומר: זיהוי דיבור בלי אינטרנט
 
 class VoiceCommandService {
   // מחלקה שאחראית על כל הלוגיקה של זיהוי הפקודות הקוליות
-  // בלי קשר ישיר ל-UI
+  // משתמשת במודל Whisper דרך sherpa-onnx במקום speech_to_text
+  // כך האפליקציה יכולה לעבוד offline בלי Google Speech
 
-  final SpeechToText _speech = SpeechToText();
-  // מנוע זיהוי הדיבור
+  OfflineRecognizer? _recognizer;
+  // מנוע זיהוי הדיבור של sherpa-onnx
+  // OfflineRecognizer = מזהה דיבור שעובד ללא אינטרנט
+
+  final AudioRecorder _recorder = AudioRecorder();
+  // מקליט האודיו מהמיקרופון
+  // בחבילה record אין צורך ב-openRecorder
 
   bool _isListening = false;
-  // משתנה פנימי ששומר האם כרגע אנחנו במצב האזנה
+  // האם כרגע אנחנו במצב האזנה
 
   Function()? _onErrorCallback;
   // callback חיצוני שמסך אחר יכול להעביר
-  // למשל כדי להפעיל מחדש את ההאזנה אוטומטית אם קרתה שגיאה
+  // יופעל אם קרתה שגיאה ונרצה לנסות להתאושש
+
+  Timer? _processTimer;
+  // טיימר שמפעיל עיבוד של האודיו כל כמה שניות
+  // כך יוצרים האזנה כמעט רציפה:
+  // מקליטים כמה שניות -> מעבדים -> מקליטים שוב
+
+  String? _audioPath;
+  // הנתיב לקובץ ה-WAV הזמני שאליו נשמרת ההקלטה
 
   bool get isListening => _isListening;
-  // getter לקריאה בלבד - מאפשר למחלקות אחרות לדעת
-  // אם כרגע המנוע מאזין
+  // getter לקריאה בלבד
+  // מאפשר למסכים אחרים לדעת אם השירות מאזין כרגע
 
   Future<bool> initialize() async {
-    // פונקציה שמאתחלת את מנוע זיהוי הדיבור
-    // מחזירה true אם השירות זמין, אחרת false
+    // אתחול מנוע זיהוי הדיבור
+    // מחזיר true אם הכל הצליח, אחרת false
 
-    final available = await _speech.initialize(
-      debugLogging: true,
-      // מפעיל לוגים פנימיים של הספרייה
-      // מאוד עוזר בזמן בדיקות ותקלות
+    try {
+      // אתחול חובה של sherpa-onnx לפני שימוש במזהה הדיבור
+      // אם Android Studio מסמן את השורה הזאת באדום,
+      // צריך לבדוק בדוגמה של החבילה שלך מה שם פונקציית האתחול המדויק.
+      initBindings();
+      // מציאת תיקיית documents המקומית של האפליקציה
+      // לשם נעתיק את קבצי המודל מתוך assets
+      final dir = await getApplicationDocumentsDirectory();
+      final modelDir = '${dir.path}/whisper';
 
-      onStatus: (status) {
-        // callback שנקרא בכל שינוי מצב של מנוע הדיבור
+      // יצירת תיקיית המודל אם היא עדיין לא קיימת
+      await Directory(modelDir).create(recursive: true);
 
-        if (kDebugMode) debugPrint('Speech status: $status');
+      // רשימת קבצי המודל שצריכים להיות ב-assets/whisper/
+      // ודא שב-pubspec.yaml רשמת:
+      //
+      // flutter:
+      //   assets:
+      //     - assets/whisper/
+      final files = [
+        'tiny-encoder.int8.onnx',
+        // קובץ encoder של Whisper
 
-        if (status == 'notListening' || status == 'done') {
-          // אם המנוע סיים או כבר לא מאזין
-          _isListening = false;
-        } else if (status == 'listening') {
-          // אם התחיל להאזין
-          _isListening = true;
-        }
-      },
+        'tiny-decoder.int8.onnx',
+        // קובץ decoder של Whisper
 
-      onError: (error) {
-        // callback שנקרא אם יש שגיאה בזיהוי דיבור
+        'tiny-tokens.txt',
+        // קובץ tokens / מילון של המודל
+      ];
 
-        if (kDebugMode) {
-          debugPrint('Speech error msg: ${error.errorMsg}');
-          debugPrint('Speech error permanent: ${error.permanent}');
-        }
+      for (final file in files) {
+        final target = File('$modelDir/$file');
 
-        _isListening = false;
-        // אם קרתה שגיאה - מעדכנים שכבר לא מאזינים
+        if (!target.existsSync()) {
+          // אם הקובץ עדיין לא הועתק לתיקייה המקומית,
+          // נעתיק אותו מתוך assets
+          final data = await rootBundle.load('assets/whisper/$file');
 
-        // אם מדובר בשגיאת רשת - מחכים קצת לפני ניסיון restart
-        if (error.errorMsg.contains('network')) {
-          Future.delayed(const Duration(seconds: 3), () {
-            _onErrorCallback?.call();
-          });
-        } else {
-          // בכל שגיאה אחרת - מפעילים מיד את ה-callback אם קיים
-          _onErrorCallback?.call();
-        }
-      },
-    );
+          await target.writeAsBytes(data.buffer.asUint8List());
 
-    if (kDebugMode) {
-      debugPrint('Speech initialize available: $available');
-      debugPrint('Speech isAvailable: ${_speech.isAvailable}');
-      debugPrint('Speech isListening: ${_speech.isListening}');
-    }
-
-    // אם השירות זמין - נביא גם מידע על השפות הנתמכות
-    if (available) {
-      final locales = await _speech.locales();
-      final systemLocale = await _speech.systemLocale();
-
-      if (kDebugMode) {
-        debugPrint('System locale: ${systemLocale?.localeId}');
-        debugPrint('Supported locales:');
-
-        for (final locale in locales) {
-          debugPrint(' - ${locale.localeId} / ${locale.name}');
+          if (kDebugMode) {
+            debugPrint('Copied model file: $file');
+          }
         }
       }
-    } else {
-      if (kDebugMode) {
-        debugPrint('Speech recognition is NOT available on this device');
-      }
-    }
 
-    return available;
+      // הגדרת המודל עם הנתיבים המקומיים
+      // חשוב: הנתיבים חייבים להצביע לקבצים אמיתיים במערכת הקבצים,
+      // לא ישירות ל-assets, ולכן קודם העתקנו אותם ל-documents.
+      final config = OfflineRecognizerConfig(
+        model: OfflineModelConfig(
+          whisper: OfflineWhisperModelConfig(
+            encoder: '$modelDir/tiny-encoder.int8.onnx',
+            decoder: '$modelDir/tiny-decoder.int8.onnx',
+
+            // זיהוי בעברית
+            language: 'he',
+
+            // transcribe = תמלול
+            // לא translate, כי אנחנו לא רוצים תרגום לאנגלית
+            task: 'transcribe',
+          ),
+
+          // קובץ הטוקנים של המודל
+          tokens: '$modelDir/tiny-tokens.txt',
+
+          // מספר threads לעיבוד
+          // 2 מתאים לרוב הטלפונים בלי להעמיס יותר מדי
+          numThreads: 2,
+
+          // במצב debug נקבל יותר לוגים
+          debug: kDebugMode,
+        ),
+      );
+
+      // יצירת מנוע הזיהוי בפועל
+      _recognizer = OfflineRecognizer(config);
+
+      if (kDebugMode) {
+        debugPrint('sherpa-onnx Whisper initialized successfully');
+      }
+
+      return true;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('sherpa-onnx init error: $e');
+      }
+
+      _recognizer = null;
+      return false;
+    }
   }
 
   Future<void> startListening(
       Function(String) onCommand, {
         required String localeId,
+        // נשאר כדי לא לשבור את הקוד הקיים ב-MainScreen
+        // בפועל sherpa-onnx משתמש ב-language: 'he' שהגדרנו למודל
+
         Function()? onError,
       }) async {
-    // פונקציה שמתחילה האזנה לדיבור
+    // התחלת האזנה לפקודות קוליות
     //
-    // onCommand = פונקציה חיצונית שמקבלת את הטקסט שזוהה
-    // localeId = השפה בה מאזינים, למשל:
-    // he-IL לעברית
-    // en-US לאנגלית
+    // onCommand = הפונקציה שתופעל כאשר מזוהה טקסט
     // onError = callback אופציונלי לשגיאות
 
-    if (!_speech.isAvailable) {
-      // אם השירות לא זמין - לא ננסה בכלל להתחיל האזנה
-      if (kDebugMode) debugPrint('Speech is not available');
+    if (_recognizer == null) {
+      // אם המודל לא אותחל, אין מה להתחיל האזנה
+      if (kDebugMode) {
+        debugPrint('Recognizer not initialized');
+      }
       return;
     }
 
     if (_isListening) {
-      // אם כבר מאזינים - לא מפעילים האזנה נוספת
-      if (kDebugMode) debugPrint('Speech already listening');
+      // מניעת הפעלה כפולה של האזנה
+      if (kDebugMode) {
+        debugPrint('Already listening');
+      }
       return;
     }
 
     _onErrorCallback = onError;
-    // שומרים את ה-callback כדי ש-onError של initialize יוכל להשתמש בו
 
-    _isListening = true;
-    // מעדכנים ידנית שהתחילה האזנה
+    try {
+      final hasPermission = await _recorder.hasPermission();
+      // בדיקה שיש הרשאת מיקרופון
 
-    if (kDebugMode) {
-      debugPrint('Starting speech listening with locale: $localeId');
-    }
-
-    await _speech.listen(
-      onResult: (result) {
-        // callback שנקרא בכל פעם שיש תוצאה מהדיבור
-        // זה יכול להיות גם partial וגם final
-
+      if (!hasPermission) {
         if (kDebugMode) {
-          debugPrint(
-            'recognizedWords: ${result.recognizedWords}, finalResult: ${result.finalResult}',
-          );
+          debugPrint('No microphone permission');
         }
+        return;
+      }
 
-        // אם התקבלה תוצאה סופית ויש טקסט לא ריק
-        if (result.finalResult && result.recognizedWords.isNotEmpty) {
-          onCommand(result.recognizedWords);
-          // שולחים את הטקסט החוצה לטיפול במסך הראשי
-        }
-      },
+      final dir = await getTemporaryDirectory();
+      _audioPath = '${dir.path}/voice_command.wav';
+      // קובץ זמני שאליו נקליט כל מקטע דיבור
 
-      listenMode: ListenMode.dictation,
-      // מצב dictation מתאים למשפטים חופשיים יותר
-      // אם בעתיד תרצה רק פקודות קצרות, אפשר לבדוק גם מצבים אחרים
+      await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.wav,
+          sampleRate: 16000,
+          numChannels: 1,
+        ),
+        path: _audioPath!,
+      );
 
-      localeId: localeId,
-      // שפת ההאזנה
-      // חשוב מאוד לשלוח ערך תקין כמו he-IL ולא he_IL
+      _isListening = true;
 
-      pauseFor: const Duration(seconds: 5),
-      // אם יש שקט של 5 שניות - המנוע יפסיק להאזין
+      if (kDebugMode) {
+        debugPrint('Recording started');
+      }
 
-      listenFor: const Duration(seconds: 30),
-      // זמן מקסימלי של סשן האזנה אחד
+      _processTimer = Timer.periodic(
+        const Duration(seconds: 4),
+            (_) async {
+          await _processAudio(onCommand);
+        },
+      );
+      // כל 4 שניות:
+      // 1. עוצרים הקלטה
+      // 2. מעבדים את הקובץ
+      // 3. שולחים טקסט אם זוהה
+      // 4. מתחילים להקליט שוב
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('startListening error: $e');
+      }
 
-      cancelOnError: false,
-      // אם יש שגיאה, לא מבטלים את כל המנוע אוטומטית
-      // אנחנו מטפלים בזה דרך onError
-
-      partialResults: true,
-      // מאפשר לקבל תוצאות חלקיות תוך כדי דיבור
-
-      onDevice: true,
-      // מבקש לעבוד על המכשיר עצמו בלי אינטרנט
-      // שים לב: זה תלוי אם המכשיר באמת תומך בזה
-    );
+      _isListening = false;
+      _onErrorCallback?.call();
+    }
   }
 
-  Future<void> stopListening() async {
-    // פונקציה שעוצרת את ההאזנה הנוכחית
+  Future<void> _processAudio(Function(String) onCommand) async {
+    // עיבוד קטע האודיו שהוקלט
+    // הפונקציה הזאת נקראת כל כמה שניות על ידי הטיימר
 
-    if (!_isListening) {
-      // אם המנוע לא מאזין כרגע - לא עושים כלום
+    if (!_isListening || _recognizer == null || _audioPath == null) {
       return;
     }
 
-    _onErrorCallback = null;
-    // מנקים callback כדי שלא תקרה הפעלה חוזרת בטעות
-    // אחרי עצירה מכוונת
+    try {
+      await _recorder.stop();
+      // עוצרים הקלטה כדי שהקובץ ייסגר ואפשר יהיה לקרוא אותו
 
-    await _speech.stop();
-    // עוצר את זיהוי הדיבור
+      final audioFile = File(_audioPath!);
+
+      if (!audioFile.existsSync()) {
+        await _restartRecording();
+        return;
+      }
+
+      final audioBytes = await audioFile.readAsBytes();
+
+      if (audioBytes.length < 44) {
+        // קובץ WAV קצר מדי או לא תקין
+        await _restartRecording();
+        return;
+      }
+
+      // קובץ WAV רגיל מכיל header של 44 בייט
+      // אחרי ה-header נמצאים נתוני PCM
+      final pcmBytes = audioBytes.sublist(44);
+
+      // המרת PCM 16-bit little-endian ל-Float32List
+      final samples = Float32List(pcmBytes.length ~/ 2);
+
+      for (int i = 0; i < samples.length; i++) {
+        final lo = pcmBytes[i * 2];
+        final hi = pcmBytes[i * 2 + 1];
+
+        final sample = (hi << 8) | lo;
+
+        // המרה מטווח int16 לטווח float של [-1.0, 1.0]
+        samples[i] = sample > 32767
+            ? (sample - 65536) / 32768.0
+            : sample / 32768.0;
+      }
+
+      final stream = _recognizer!.createStream();
+      // יצירת stream חד-פעמי לזיהוי
+
+      stream.acceptWaveform(
+        samples: samples,
+        sampleRate: 16000,
+      );
+
+      _recognizer!.decode(stream);
+      // הפעלת הזיהוי
+
+      final result = _recognizer!.getResult(stream);
+      // קבלת הטקסט שזוהה
+
+      stream.free();
+      // שחרור stream מהזיכרון
+
+      final text = result.text.trim();
+
+      if (kDebugMode) {
+        debugPrint('Whisper recognized: "$text"');
+      }
+
+      if (text.isNotEmpty) {
+        onCommand(text);
+      }
+
+      await _restartRecording();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('processAudio error: $e');
+      }
+
+      await _restartRecording();
+    }
+  }
+
+  Future<void> _restartRecording() async {
+    // התחלת הקלטה מחדש אחרי כל עיבוד
+    // רק אם עדיין נמצאים במצב האזנה
+
+    if (!_isListening || _audioPath == null) {
+      return;
+    }
+
+    try {
+      await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.wav,
+          sampleRate: 16000,
+          numChannels: 1,
+        ),
+        path: _audioPath!,
+      );
+
+      if (kDebugMode) {
+        debugPrint('Recording restarted');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('restartRecording error: $e');
+      }
+    }
+  }
+
+  Future<void> stopListening() async {
+    // עצירת האזנה
+
+    if (!_isListening) {
+      return;
+    }
 
     _isListening = false;
-    // מעדכן את המצב הפנימי
+
+    _processTimer?.cancel();
+    _processTimer = null;
+
+    _onErrorCallback = null;
+
+    try {
+      await _recorder.stop();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('stopListening error: $e');
+      }
+    }
+  }
+
+  void dispose() {
+    // שחרור משאבים
+    // חשוב לקרוא לזה מתוך dispose של המסך
+
+    stopListening();
+
+    _processTimer?.cancel();
+    _processTimer = null;
+
+    _recognizer?.free();
+    _recognizer = null;
   }
 }

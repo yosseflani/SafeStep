@@ -2,11 +2,11 @@ import 'package:camera/camera.dart'; // ספריית מצלמה – מאפשרת
 import 'package:flutter/foundation.dart'; // כלים בסיסיים של Flutter (כמו kDebugMode)
 import 'package:flutter/material.dart'; // רכיבי UI של Flutter (כפתורים, טקסטים, צבעים וכו')
 import 'package:flutter_tts/flutter_tts.dart'; // ספריית Text To Speech – דיבור בקול
-import 'package:flutter_beep/flutter_beep.dart'; // ספריית צפצוף – מייצרת צליל התראה מובנה
 import 'package:vibration/vibration.dart'; // ספריית רטט – מאפשרת להפעיל vibration במכשיר
 import 'dart:math'; // לחישוב sqrt עבור האקסלרומטר
 import 'dart:async'; // לניהול StreamSubscription של האקסלרומטר
 import 'package:sensors_plus/sensors_plus.dart'; // ספריית חיישנים – קריאת נתוני האקסלרומטר
+import 'package:audioplayers/audioplayers.dart';
 
 import '../models/detection.dart'; // מודל שמייצג אובייקט שזוהה (Detection)
 import '../services/alert_service.dart'; // שירות שמנהל התראות קוליות
@@ -38,6 +38,7 @@ class _MainScreenState extends State<MainScreen> {
   final FlutterTts _tts = FlutterTts(); // מנוע Text To Speech
   final DisplayManager _displayManager = DisplayManager(); // יצירת מופע של DisplayManager כדי להשתמש בו בתוך המסך
   final VoiceCommandService _voiceService = VoiceCommandService(); // יצירת מופע של שירות הפקודות הקוליות
+  final AudioPlayer _player = AudioPlayer();
 
   // ------------------- רטט -------------------
   DateTime? _lastVibrationTime; // זמן הרטט האחרון
@@ -328,8 +329,7 @@ class _MainScreenState extends State<MainScreen> {
       // חשוב כדי למנוע מצב שהאפליקציה שומעת את עצמה
 
       if (alertLevel == _AlertLevel.beepAndVoice) {
-        await FlutterBeep.beep();
-        // צפצוף לפני ההכרזה – מתריע שמדובר בסכנה גבוהה
+        await _player.play(AssetSource('beep.mp3'));        // צפצוף לפני ההכרזה – מתריע שמדובר בסכנה גבוהה
         await Future.delayed(const Duration(milliseconds: 300));
         // המתנה קצרה בין הצפצוף להכרזה הקולית
       }
@@ -346,135 +346,148 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
-  /// מחזיר את רמת ההתראה המתאימה לפי ציון הסיכון ומצב תנועת המשתמש
+  /// מחזיר רמת התראה לפי סיכון והתקרבות בלבד
   _AlertLevel _getAlertLevel(Detection detection) {
-    final riskScore = detection.riskScore;
+    final double riskScore = detection.riskScore; // לוקח את ציון הסיכון
 
-    // המשתמש עומד → רק סכנה גבוהה מאוד תוביל להתראה
-    if (!_userIsMoving) {
-      if (riskScore >= _beepAlertThreshold) return _AlertLevel.beepAndVoice;
-      // עומד + סיכון גבוה מאוד → צפצוף + קול
-      if (riskScore >= _voiceAlertThreshold) return _AlertLevel.voiceOnly;
-      // עומד + סיכון בינוני → קול בלבד (ללא צפצוף)
-      return _AlertLevel.none;
-      // עומד + סיכון נמוך → שקט
+    if (!detection.isApproaching) { // אם אין התקרבות (לא גדל ולא זז למטה)
+      return _AlertLevel.none; // לא מתריעים בכלל
     }
 
-    // המשתמש הולך → מגיב לפי כל הרמות
-    if (riskScore >= _beepAlertThreshold) return _AlertLevel.beepAndVoice;
-    // הולך + סיכון גבוה → צפצוף + קול + רטט
-    if (riskScore >= _voiceAlertThreshold) return _AlertLevel.voiceOnly;
-    // הולך + סיכון בינוני → קול + רטט
-    if (riskScore >= _vibrationOnlyThreshold) return _AlertLevel.vibrationOnly;
-    // הולך + סיכון נמוך → רטט בלבד
-    return _AlertLevel.none;
-    // מתחת לסף המינימלי → שקט לגמרי
+    if (riskScore >= _beepAlertThreshold) { // סיכון גבוה מאוד
+      return _AlertLevel.beepAndVoice; // רטט + צפצוף + קול
+    }
+
+    if (riskScore >= _voiceAlertThreshold) { // סיכון בינוני
+      return _AlertLevel.voiceOnly; // רטט + קול
+    }
+
+    if (riskScore >= _vibrationOnlyThreshold) { // סיכון נמוך
+      return _AlertLevel.vibrationOnly; // רטט בלבד
+    }
+
+    return _AlertLevel.none; // מתחת לסף – אין התראה
   }
 
   void _handleVoiceCommand(String command) {
     // פונקציה שמקבלת טקסט מזוהה מהקול ומחליטה איזו פעולה לבצע
+
     if (kDebugMode) debugPrint('🎤 נשמע: "$command"');
 
-    final text = command.toLowerCase().trim();
-    // ממיר לאותיות קטנות ומנקה רווחים מיותרים כדי להקל על ההשוואה
+    final text = command
+        .toLowerCase()
+    // מסיר סימנים לא רלוונטיים (פסיקים, סימני קריאה וכו')
+        .replaceAll(RegExp(r'[^\u0590-\u05FFa-zA-Z\s]'), ' ')
+    // מנקה רווחים כפולים
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
 
-    final List<String> startCommands = _isHebrew
-        ? [
-      'הפעל', 'הפעל זיהוי', 'הפעלה', 'הפעלה זיהוי',
-      'התחל', 'התחל זיהוי',
-      'תתחיל', 'תתחיל זיהוי',
-      'תפעיל', 'תפעיל זיהוי',
-      'תדליק', 'תדליק זיהוי',
-      'התחיל', 'התחיל זיהוי',
-      'הפעיל', 'הפעיל זיהוי',
-      'להתחיל', 'להפעיל',
-      'פתח', 'פתח זיהוי', 'פתיחה',
-      'הדלק', 'הדלק זיהוי',
-      'אפעיל', 'אתחיל',
-      'זיהוי', 'התחל לזהות', 'תתחיל לזהות',
-    ]
-        : [
-      'start', 'start detection', 'begin', 'begin detection',
-      'activate', 'activate detection', 'turn on', 'turn on detection',
-      'run', 'run detection', 'go', 'detect', 'open detection',
-    ];
-    // ביטויים להפעלת זיהוי לפי השפה שנבחרה
+    if (kDebugMode) debugPrint('🧠 אחרי ניקוי: "$text"');
 
-    final List<String> stopCommands = _isHebrew
-        ? [
-      'עצור', 'עצור זיהוי',
-      'הפסק', 'הפסק זיהוי',
-      'כבה', 'כבה זיהוי',
-      'תעצור', 'תעצור זיהוי',
-      'תפסיק', 'תפסיק זיהוי',
-      'תכבה', 'תכבה זיהוי',
-      'עצר', 'עצרתי', 'הפסיק', 'כיבה',
-      'לעצור', 'להפסיק', 'לכבות',
-      'סגור', 'סגור זיהוי', 'סיים', 'סיים זיהוי',
-      'די', 'די זיהוי', 'מספיק',
-      'אעצור', 'אפסיק',
-    ]
-        : [
-      'stop', 'stop detection', 'pause', 'pause detection',
-      'turn off', 'turn off detection', 'disable', 'disable detection',
-      'end', 'end detection', 'quit', 'halt',
-    ];
-    // ביטויים לעצירת זיהוי לפי השפה שנבחרה
+    // ==============================
+    // 🔹 זיהוי מילים "חכמות"
+    // ==============================
 
-    final List<String> settingsCommands = _isHebrew
-        ? [
-      'הגדרות', 'פתח הגדרות', 'תפתח הגדרות',
-      'מסך הגדרות', 'להגדרות', 'כנס להגדרות',
-      'תכנס להגדרות', 'פתח את ההגדרות',
-    ]
-        : [
-      'settings', 'open settings', 'show settings',
-      'go to settings', 'settings screen', 'preferences',
-    ];
-    // ביטויים לפתיחת הגדרות לפי השפה שנבחרה
+    // מילים שמצביעות על פעולה של התחלה
+    final hasStartWord =
+        text.contains('הפעל') ||
+            text.contains('תפעיל') ||
+            text.contains('התחל') ||
+            text.contains('תתחיל') ||
+            text.contains('מתחיל') ||
+            text.contains('התחיל') ||
+            text.contains('הפעלת') ||
+            text.contains('תדליק') ||
+            text.contains('הדלק');
 
-    final List<String> vibrationOnCommands = _isHebrew
-        ? [
-      'הפעל רטט', 'תפעיל רטט', 'רטט פעיל',
-      'תדליק רטט', 'הדלק רטט', 'רטט כן',
-      'הפעל את הרטט', 'תפעיל את הרטט',
-    ]
-        : [
-      'turn on vibration', 'enable vibration', 'vibration on',
-      'activate vibration', 'start vibration',
-    ];
-    // ביטויים להפעלת רטט לפי השפה שנבחרה
+    // מילים שמצביעות על עצירה
+    final hasStopWord =
+        text.contains('עצור') ||
+            text.contains('תעצור') ||
+            text.contains('הפסק') ||
+            text.contains('תפסיק') ||
+            text.contains('כבה') ||
+            text.contains('תכבה') ||
+            text.contains('אל') || // חשוב! המודל מזהה לפעמים "אל"
+            text.contains('די') ||
+            text.contains('מספיק');
 
-    final List<String> vibrationOffCommands = _isHebrew
-        ? [
-      'כבה רטט', 'תכבה רטט', 'רטט כבוי',
-      'תפסיק רטט', 'עצור רטט', 'בלי רטט',
-      'כבה את הרטט', 'תכבה את הרטט', 'ללא רטט',
-    ]
-        : [
-      'turn off vibration', 'disable vibration', 'vibration off',
-      'stop vibration', 'no vibration',
-    ];
-    // ביטויים לכיבוי רטט לפי השפה שנבחרה
+    // מילים שמצביעות על זיהוי (context)
+    final hasDetectionWord =
+        text.contains('זיהוי') ||
+            text.contains('זהוי') || // טעות כתיב נפוצה
+            text.contains('לזהות');
 
-    bool containsAny(List<String> commands) {
-      return commands.any((phrase) => text.contains(phrase));
+    // מילים לפתיחת הגדרות
+    final hasSettingsWord =
+        text.contains('הגדרות') ||
+            text.contains('הגדרה') ||
+            text.contains('settings');
+
+    // מילים להפעלת רטט
+    final hasVibrationOn =
+        text.contains('רטט') &&
+            (text.contains('הפעל') ||
+                text.contains('תפעיל') ||
+                text.contains('הדלק') ||
+                text.contains('תדליק'));
+
+    // מילים לכיבוי רטט
+    final hasVibrationOff =
+        text.contains('רטט') &&
+            (text.contains('כבה') ||
+                text.contains('תכבה') ||
+                text.contains('עצור') ||
+                text.contains('תפסיק'));
+
+    // ==============================
+    // 🔹 לוגיקה של פעולות
+    // ==============================
+
+    // הפעלת זיהוי
+    if (hasDetectionWord && hasStartWord) {
+      if (kDebugMode) debugPrint('✅ זוהתה פקודת START');
+
+      if (!_isRunning) {
+        _startDetection();
+      }
+      return;
     }
-    // פונקציית עזר שבודקת האם הטקסט שנאמר מכיל אחד מהביטויים ברשימה
 
-    if (containsAny(startCommands)) {
-      if (!_isRunning) _startDetection();
-    } else if (containsAny(stopCommands)) {
-      if (_isRunning) _stopDetection();
-    } else if (containsAny(settingsCommands)) {
+    // עצירת זיהוי
+    if (hasDetectionWord && hasStopWord) {
+      if (kDebugMode) debugPrint('🛑 זוהתה פקודת STOP');
+
+      if (_isRunning) {
+        _stopDetection();
+      }
+      return;
+    }
+
+    // פתיחת הגדרות
+    if (hasSettingsWord) {
+      if (kDebugMode) debugPrint('⚙️ זוהתה פקודת SETTINGS');
+
       _openSettings();
-    } else if (containsAny(vibrationOnCommands)) {
+      return;
+    }
+
+    // הפעלת רטט
+    if (hasVibrationOn) {
+      if (kDebugMode) debugPrint('📳 זוהתה הפעלת רטט');
+
       setState(() => _vibrationEnabled = true);
-    } else if (containsAny(vibrationOffCommands)) {
+      return;
+    }
+
+    // כיבוי רטט
+    if (hasVibrationOff) {
+      if (kDebugMode) debugPrint('🔇 זוהתה כיבוי רטט');
+
       setState(() => _vibrationEnabled = false);
+      return;
     }
   }
-
   Future<void> _handleVibration(String tag) async {
     // פונקציה שמפעילה רטט בהתאם לסוג האובייקט שזוהה
     if (!_vibrationEnabled) return;
@@ -685,7 +698,7 @@ class _MainScreenState extends State<MainScreen> {
     _yoloService.dispose(); // שחרור משאבי מודל הזיהוי
     _alertService.stop(); // עצירת דיבור/התראות
     _tts.stop(); // עצירת מנוע TTS המקומי
-    _voiceService.stopListening(); // עצירת האזנה לפקודות קוליות
+    _voiceService.dispose(); // עצירת האזנה לפקודות קוליות
     super.dispose(); // קריאה ל-dispose של המחלקה האב
   }
 

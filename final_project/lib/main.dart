@@ -7,11 +7,15 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/main_screen.dart';
 // ייבוא המסך הראשי של האפליקציה
 
+import 'package:sherpa_onnx/sherpa_onnx.dart';
+
 void main() async {
   // פונקציית התחלה של האפליקציה
 
   WidgetsFlutterBinding.ensureInitialized();
   // מאתחל את Flutter (חובה לפני פעולות async או plugins)
+
+  initBindings();
 
   runApp(const SafeStep());
   // מפעיל את האפליקציה עם ה-Widget הראשי SafeStep

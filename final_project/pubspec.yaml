@@ -37,12 +37,13 @@ dependencies:
   vibration: ^2.0.1 #הרשאות רטט
   flutter_vision: ^2.0.0
   permission_handler: ^11.3.1
-  speech_to_text: ^7.3.0
   sensors_plus: ^6.0.1
-  flutter_beep: ^1.0.0
+  audioplayers: ^5.2.1
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
+  sherpa_onnx: ^1.10.28
+  record: ^6.2.0
+  path_provider: ^2.0.0
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +70,9 @@ flutter:
   assets:
     - assets/yolov8n_float32.tflite
     - assets/labels.txt
+    - assets/beep.mp3
+    - assets/whisper/
+
 
   # To add assets to your application, add an assets section, like this:
   # assets:
