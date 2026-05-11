@@ -1,7 +1,6 @@
 ````markdown
 # 🦯 SafeStep
 
-<div align="center">
 
 ### אפליקציית AI חכמה לעיוורים ולקויי ראייה  
 ### לזיהוי מכשולים בזמן אמת באמצעות Flutter ו־YOLOv8
