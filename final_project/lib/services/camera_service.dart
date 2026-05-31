@@ -1,147 +1,145 @@
 import 'package:camera/camera.dart';
-// ספרייה לגישה למצלמה (CameraController, CameraImage וכו')
-
+import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
-// ספרייה לבקשת הרשאות מהמשתמש (מצלמה במקרה הזה)
 
 class CameraService {
-  // מחלקת Service שמנהלת את כל הלוגיקה של המצלמה (בלי UI)
-
   CameraController? _controller;
-  // אובייקט שמנהל את המצלמה בפועל (יכול להיות null אם לא מאותחל)
 
   bool _isInitialized = false;
-  // האם המצלמה כבר אותחלה
-
   bool _isProcessing = false;
-  // מונע הצפת פריימים – אם עדיין מעבדים פריים, מדלגים על הבא
+
+  // ✅ מעקב ביצועים – מופעל רק ב-Debug כדי לא לפגוע ב-Release
+  int _frameCounter = 0;
+  int _skippedFrames = 0;
+  static const _debugFrameInterval = 15; // דווח כל 15 פריימים
 
   CameraController? get controller => _controller;
-  // מאפשר גישה ל-controller מבחוץ (למשל להצגת Preview)
-
   bool get isInitialized => _isInitialized;
-  // מאפשר לבדוק מבחוץ אם המצלמה מוכנה
+
+  // ✅ חשיפת סטטיסטיקות לשימוש חיצוני (לניטור באפליקציה)
+  Map<String, int> getStats() => {
+    'total': _frameCounter,
+    'skipped': _skippedFrames,
+    'processed': _frameCounter - _skippedFrames,
+  };
 
   Future<void> initialize({
     ResolutionPreset preset = ResolutionPreset.low,
-    // איכות המצלמה – נמוכה כדי לחסוך ביצועים (מספיק לזיהוי)
   }) async {
+    if (kDebugMode) debugPrint('📷 CAMERA: initialize() | preset=$preset');
 
     if (_isInitialized) return;
-    // אם כבר אותחל – לא מאתחל שוב
 
     try {
-      // בקשת הרשאת מצלמה מהמשתמש
       final status = await Permission.camera.request();
-
-      if (!status.isGranted) {
-        throw Exception('Camera permission denied');
-        // אם המשתמש לא אישר – זורקים שגיאה
-      }
+      if (!status.isGranted) throw Exception('Camera permission denied');
 
       final cameras = await availableCameras();
-      // מביא את כל המצלמות במכשיר
-
       if (cameras.isEmpty) throw Exception('No cameras available');
-      // אם אין מצלמות – שגיאה
 
-      // מצלמה אחורית מועדפת, אם אין - לוקחים את הראשונה
       final selectedCamera = cameras.firstWhere(
             (c) => c.lensDirection == CameraLensDirection.back,
-        // מחפש מצלמה אחורית
         orElse: () => cameras.first,
-        // אם אין – לוקח את הראשונה
       );
 
       _controller = CameraController(
         selectedCamera,
         preset,
         enableAudio: false,
-        // לא צריך מיקרופון
-
-        imageFormatGroup: ImageFormatGroup.yuv420,
-        // פורמט תמונה שמתאים לעיבוד (ML)
+        imageFormatGroup: ImageFormatGroup.yuv420, // ✅ פורמט אופטימלי ל-ML
       );
 
       await _controller!.initialize();
-      // מאתחל את המצלמה בפועל
 
-      // הגדרות אופטימליות לאיכות זיהוי
+      // ✅ הגדרות אופטימליות לזיהוי
       await _controller!.setFocusMode(FocusMode.auto);
-      // פוקוס אוטומטי
-
       await _controller!.setExposureMode(ExposureMode.auto);
-      // חשיפה אוטומטית
-
       await _controller!.setFlashMode(FlashMode.off);
-      // מבטל פלאש
 
       _isInitialized = true;
-      // מסמן שהמצלמה מוכנה
-
+      if (kDebugMode) debugPrint('✅ CAMERA: initialized successfully');
     } on CameraException catch (e) {
       _controller = null;
-      // במקרה של שגיאת מצלמה – מאפס
-
+      _isInitialized = false;
+      if (kDebugMode) debugPrint('❌ CAMERA ERROR: ${e.code} - ${e.description}');
       throw Exception('Camera error: ${e.description}');
-      // זורק שגיאה עם פירוט
-
     } catch (e) {
       _controller = null;
-      // שגיאה כללית – מאפס controller
-
+      _isInitialized = false;
       rethrow;
-      // זורק את השגיאה הלאה
     }
   }
 
-  // מתחיל הזרמת פריימים - כל פריים נשלח ל-onFrame
-  Future<void> startStream(Future<void> Function(CameraImage image) onFrame) async {
-
+  Future<void> startStream(
+      Future<void> Function(CameraImage image) onFrame,
+      ) async {
     if (_controller == null || !_isInitialized) return;
-    // אם אין מצלמה או לא אותחל – לא עושה כלום
-
     if (_controller!.value.isStreamingImages) return;
-    // אם כבר זורם סטרים – לא מתחיל שוב
+
+    _frameCounter = 0;
+    _skippedFrames = 0;
 
     await _controller!.startImageStream((CameraImage image) async {
-      // מתחיל לקבל פריימים מהמצלמה
+      _frameCounter++;
 
-      if (_isProcessing) return;
-      // אם עדיין מעבדים פריים קודם – מדלג
+      // ✅ לוגיקת דילוג חכמה עם ניטור
+      if (_isProcessing) {
+        _skippedFrames++;
+
+        // ✅ דווח תקופתי רק ב-Debug
+        if (kDebugMode && _frameCounter % _debugFrameInterval == 0) {
+          final dropRate = (_skippedFrames / _frameCounter * 100).toStringAsFixed(1);
+          debugPrint('📊 CAMERA: frame=$_frameCounter | skipped=$_skippedFrames ($dropRate%) | isProcessing=$_isProcessing');
+        }
+        return;
+      }
 
       _isProcessing = true;
-      // מסמן שמתחיל עיבוד
 
       try {
         await onFrame(image);
-        // שולח את הפריים לפונקציה שלך (למשל זיהוי אובייקטים)
+      } catch (e, stack) {
+        if (kDebugMode) {
+          debugPrint('❌ CAMERA: onFrame failed: $e');
+          debugPrint('STACK: $stack');
+        }
       } finally {
         _isProcessing = false;
-        // תמיד משתחרר (גם אם הייתה שגיאה)
       }
     });
+
+    if (kDebugMode) debugPrint('🎬 CAMERA: stream started');
   }
 
-  // עוצר את הזרמת הפריימים
+  // ✅ מתודה חדשה: בדיקת בריאות הסטרים
+  bool isStreamHealthy({double maxSkipRate = 0.3}) {
+    if (_frameCounter < _debugFrameInterval) return true;
+    final skipRate = _skippedFrames / _frameCounter;
+    return skipRate <= maxSkipRate;
+  }
+
+  // ✅ מתודה חדשה: איפוס סטטיסטיקות (לניטור תקופתי)
+  void resetStats() {
+    _frameCounter = 0;
+    _skippedFrames = 0;
+  }
+
   Future<void> stopStream() async {
-    if (_controller != null && _controller!.value.isStreamingImages) {
+    if (_controller?.value.isStreamingImages == true) {
       await _controller!.stopImageStream();
-      // עוצר את הסטרים אם הוא פועל
+      if (kDebugMode) debugPrint('🛑 CAMERA: stream stopped');
     }
   }
 
-  // משחרר את כל המשאבים
   Future<void> dispose() async {
-    await stopStream();
-    // קודם עוצר סטרים
+    if (kDebugMode) debugPrint('🗑️ CAMERA: dispose()');
 
+    await stopStream();
     await _controller?.dispose();
-    // משחרר את המצלמה
 
     _controller = null;
     _isInitialized = false;
     _isProcessing = false;
-    // מאפס את כל המשתנים
+    resetStats();
   }
 }

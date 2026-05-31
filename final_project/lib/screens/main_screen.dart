@@ -1,191 +1,143 @@
-import 'package:camera/camera.dart'; // ספריית מצלמה – מאפשרת עבודה עם CameraImage, שליטה במצלמה וכו'
-import 'package:flutter/foundation.dart'; // כלים בסיסיים של Flutter (כמו kDebugMode)
-import 'package:flutter/material.dart'; // רכיבי UI של Flutter (כפתורים, טקסטים, צבעים וכו')
-import 'package:flutter_tts/flutter_tts.dart'; // ספריית Text To Speech – דיבור בקול
-import 'package:vibration/vibration.dart'; // ספריית רטט – מאפשרת להפעיל vibration במכשיר
-import 'dart:math'; // לחישוב sqrt עבור האקסלרומטר
-import 'dart:async'; // לניהול StreamSubscription של האקסלרומטר
-import 'package:sensors_plus/sensors_plus.dart'; // ספריית חיישנים – קריאת נתוני האקסלרומטר
+import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:vibration/vibration.dart';
+import 'dart:math';
+import 'dart:async';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:audioplayers/audioplayers.dart';
 
-import '../models/detection.dart'; // מודל שמייצג אובייקט שזוהה (Detection)
-import '../services/alert_service.dart'; // שירות שמנהל התראות קוליות
-import '../services/camera_service.dart'; // שירות שמנהל את המצלמה
-import '../services/cooldown_manager.dart'; // מנהל זמן בין התראות (כדי לא להציף)
-import '../services/risk_scoring_service.dart'; // שירות שמחשב רמת סיכון
-import '../services/yolo_service.dart'; // שירות שמריץ את מודל YOLO לזיהוי אובייקטים
-import '../services/voice_command_service.dart'; // ייבוא שירות שמטפל בזיהוי פקודות קוליות (Speech-to-Text)
-import 'display_manager.dart'; // ייבוא המחלקה DisplayManager שאחראית על לוגיקת זמן התצוגה והחלטה מתי לעדכן
-import 'settings_screen.dart'; // מסך ההגדרות
+import '../models/detection.dart';
+import '../services/alert_service.dart';
+import '../services/camera_service.dart';
+import '../services/cooldown_manager.dart';
+import '../services/risk_scoring_service.dart';
+import '../services/yolo_service.dart';
+import 'display_manager.dart';
+import 'settings_screen.dart';
 
-class MainScreen extends StatefulWidget { // Widget עם State (משתנה בזמן ריצה)
-  const MainScreen({super.key}); // בנאי – מקבל key ומעביר ל־super
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
 
   @override
-  State<MainScreen> createState() => _MainScreenState(); // יוצר את ה־State של המסך
+  State<MainScreen> createState() => _MainScreenState();
 }
 
-const Color primaryColor = Color(0xFFFF7A00); // צבע ראשי קבוע (כתום)
+const Color primaryColor = Color(0xFFFF7A00);
 
 class _MainScreenState extends State<MainScreen> {
-  // מחלקת ה־State שמכילה את כל הלוגיקה
-
-  final CameraService _cameraService = CameraService(); // שירות מצלמה
-  final YoloService _yoloService = YoloService(); // שירות זיהוי YOLO
-  final RiskScoringService _riskScoringService = RiskScoringService(); // חישוב סיכון
-  final CooldownManager _cooldownManager = CooldownManager(); // מניעת התראות חוזרות מהר
-  final AlertService _alertService = AlertService(); // שירות התראות קוליות
-  final FlutterTts _tts = FlutterTts(); // מנוע Text To Speech
-  final DisplayManager _displayManager = DisplayManager(); // יצירת מופע של DisplayManager כדי להשתמש בו בתוך המסך
-  final VoiceCommandService _voiceService = VoiceCommandService(); // יצירת מופע של שירות הפקודות הקוליות
+  final CameraService _cameraService = CameraService();
+  final YoloService _yoloService = YoloService();
+  final RiskScoringService _riskScoringService = RiskScoringService();
+  final CooldownManager _cooldownManager = CooldownManager();
+  final AlertService _alertService = AlertService();
+  final FlutterTts _tts = FlutterTts();
+  final DisplayManager _displayManager = DisplayManager();
   final AudioPlayer _player = AudioPlayer();
 
-  // ------------------- רטט -------------------
-  DateTime? _lastVibrationTime; // זמן הרטט האחרון
-  static const _vibrationCooldown = Duration(milliseconds: 500); // זמן מינימלי בין רטטים
+  bool _isProcessingFrame = false;
 
-  // ------------------- אקסלרומטר -------------------
-  StreamSubscription? _accelerometerSubscription; // מנוי לאירועי האקסלרומטר – נשמר כדי לאפשר ביטול ב-dispose
-  static const _movementThreshold = 1.2; // סף תנועה: נמוך = רגיש יותר, גבוה = רק תנועה חזקה
-  final List<double> _magnitudeHistory = []; // רשימת 10 המדידות האחרונות לצורך ממוצע נע
-  static const _historySize = 10; // כמות המדידות לשמור בהיסטוריה
+  // 🔍 לוגים ממוקדים ל-Debug
+  void _debug(String message, [Object? error, StackTrace? stackTrace]) {
+    if (!kDebugMode) return;
+    final time = DateTime.now().toIso8601String().split('T').last.split('.').first;
+    debugPrint('[SafeStep][$time] $message');
+    if (error != null) debugPrint('[SafeStep][$time][ERROR] $error');
+    if (stackTrace != null && kDebugMode) debugPrint('[SafeStep][$time][STACK] $stackTrace');
+  }
 
-  // ------------------- מצב מערכת -------------------
-  bool _isInitialized = false; // האם המערכת כבר אותחלה
-  bool _isRunning = false; // האם הזיהוי כרגע פועל
-  bool _userIsMoving = false; // האם המשתמש זז כרגע (משפיע על סף ההתראות)
+  // 📳 רטט
+  DateTime? _lastVibrationTime;
+  static const _vibrationCooldown = Duration(milliseconds: 500);
 
-  // ------------------- הגדרות -------------------
-  double _speechRate = 0.5; // מהירות דיבור
-  bool _vibrationEnabled = true; // האם רטט פעיל
-  String _language = 'he-IL'; // שפה (עברית)
-  String? _selectedVoice; // קול נבחר (יכול להיות null)
-  List<Map<String, dynamic>> _voices = []; // רשימת קולות זמינים
+  // 📊 אקסלרומטר לזיהוי תנועה
+  StreamSubscription? _accelerometerSubscription;
+  static const _movementThreshold = 1.2;
+  final List<double> _magnitudeHistory = [];
+  static const _historySize = 10;
 
-  Detection? _currentMostDangerous; // האובייקט הכי מסוכן כרגע (או null)
+  // 🎛️ מצב מערכת
+  bool _isInitialized = false;
+  bool _isRunning = false;
+  bool _userIsMoving = false;
 
+  // ⚙️ הגדרות משתמש
+  double _speechRate = 0.5;
+  bool _vibrationEnabled = true;
+  String _language = 'he-IL';
+  String? _selectedVoice;
+  List<Map<String, dynamic>> _voices = [];
+
+  Detection? _currentMostDangerous;
   bool get _isHebrew => _language.startsWith('he');
-  // האם השפה הנוכחית היא עברית
 
-  // ------------------- ספי התראה -------------------
-  // מתחת ל-30: שקט לגמרי
-  // 30–40: רטט בלבד
-  // 40–65: רטט + שם האובייקט בקול
-  // מעל 65: רטט + צפצוף + שם האובייקט בקול
-  static const _vibrationOnlyThreshold = 30.0; // סף רטט בלבד
-  static const _voiceAlertThreshold = 40.0; // סף הוספת התראה קולית
-  static const _beepAlertThreshold = 65.0; // סף הוספת צפצוף לפני ההתראה
+  // 🚨 ספי התראה
+  static const _vibrationOnlyThreshold = 30.0;
+  static const _voiceAlertThreshold = 40.0;
+  static const _beepAlertThreshold = 65.0;
 
   @override
   void initState() {
-    // פונקציה שנקראת פעם אחת כשהמסך נוצר
-    super.initState(); // קריאה ל־initState של המחלקה האב
-    _initializeSystem(); // אתחול המערכת (מצלמה, מודל וכו')
+    super.initState();
+    _initializeSystem();
   }
 
   Future<void> _initializeSystem() async {
-    // פונקציה אסינכרונית שמבצעת אתחול של כל המערכת
     try {
-      final results = await Future.wait([
-        // מריץ כמה פעולות אסינכרוניות במקביל ומחכה שכולן יסתיימו
-        _cameraService.initialize(), // אתחול המצלמה
-        _yoloService.initModel(), // טעינת מודל YOLO לזיהוי אובייקטים
-        _voiceService.initialize(), // אתחול שירות זיהוי הקול
-        _alertService.initialize( // אתחול שירות ההתראות הקוליות
+      _debug('System initialization started');
+
+      await Future.wait([
+        _cameraService.initialize(),
+        _yoloService.initModel(),
+        _alertService.initialize(
           language: _language,
           speechRate: _speechRate,
           voiceAlertsEnabled: true,
         ),
       ]);
 
-      final bool voiceAvailable = results[2] as bool;
-      // בודק האם זיהוי קול זמין במכשיר
-
-      if (kDebugMode) {
-        debugPrint('Voice available: $voiceAvailable');
-      }
-
       final controller = _cameraService.controller;
-      // מביא את ה-controller של המצלמה
-
       if (controller?.value.previewSize != null) {
-        // בדיקה שהמצלמה מאותחלת ויש גודל תצוגה
         _riskScoringService.updateResolution(
           controller!.value.previewSize!.width.toInt(),
           controller.value.previewSize!.height.toInt(),
         );
-        // מעדכן את שירות חישוב הסיכון ברזולוציה האמיתית של המצלמה
       }
 
       final raw = await _tts.getVoices ?? [];
-      // מביא רשימת קולות מה-TTS (אם null אז רשימה ריקה)
-
       _voices = raw.whereType<Map<String, dynamic>>().toList();
-      // מסנן רק איברים שהם Map<String, dynamic> והופך לרשימה
-
       await _applyTtsSettings();
-      // מיישם את הגדרות ה-TTS (שפה, קול וכו')
 
       if (!mounted) return;
-      // אם ה-Widget כבר לא קיים בעץ – לא ממשיכים
-
       setState(() => _isInitialized = true);
-      // מעדכן את ה-state: המערכת מוכנה
 
-      // התחלת האזנה לאקסלרומטר לזיהוי תנועת המשתמש
+      // 📊 האזנה לאקסלרומטר
       _accelerometerSubscription = accelerometerEvents.listen((event) {
-        final magnitude = sqrt(
-          event.x * event.x +
-              event.y * event.y +
-              event.z * event.z,
-        );
-        // מחשב את עוצמת התנועה הכוללת בשלושת הצירים
-        // כשהטלפון נייח התוצאה היא ~9.8 (כוח הכבידה בלבד)
-
+        final magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
         _magnitudeHistory.add((magnitude - 9.8).abs());
-        // מוסיף את הסטייה מכוח הכבידה להיסטוריה
+        if (_magnitudeHistory.length > _historySize) _magnitudeHistory.removeAt(0);
 
-        if (_magnitudeHistory.length > _historySize) {
-          _magnitudeHistory.removeAt(0);
-          // שומר רק את 10 המדידות האחרונות
-        }
-
-        final average = _magnitudeHistory.reduce((a, b) => a + b)
-            / _magnitudeHistory.length;
-        // מחשב ממוצע נע של הסטיות – מונע קפיצות שקריות בין עמידה להליכה
-
+        final average = _magnitudeHistory.reduce((a, b) => a + b) / _magnitudeHistory.length;
         final moving = average > _movementThreshold;
-        // רק אם הממוצע עובר את הסף נחשב שהמשתמש בתנועה
 
         if (moving != _userIsMoving) {
           setState(() => _userIsMoving = moving);
-          // מעדכן את ה-state רק אם המצב השתנה (חיסכון ב-rebuilds)
         }
       });
 
-      await _resumeListening();
-      // התחלת האזנה לפקודות קוליות
-
+      _debug('✅ Initialization completed');
     } catch (e, stack) {
-      if (kDebugMode) debugPrint('Init error: $e\n$stack');
-      // הדפסה לקונסול רק במצב debug
-
+      _debug('❌ Initialization failed', e, stack);
       if (!mounted) return;
-
-      setState(() {});
-      // גורם ל-rebuild גם בלי שינוי ערכים
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            _isHebrew ? 'שגיאה באתחול המערכת' : 'System initialization error',
-          ),
+          content: Text(_isHebrew ? 'שגיאה באתחול המערכת' : 'System initialization error'),
           backgroundColor: Colors.red.shade900,
           action: SnackBarAction(
             label: _isHebrew ? 'נסה שוב' : 'Retry',
             textColor: Colors.white,
             onPressed: _initializeSystem,
-            // לחיצה מפעילה שוב את האתחול
           ),
         ),
       );
@@ -193,439 +145,168 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _applyTtsSettings() async {
-    // פונקציה אסינכרונית שמחילה את הגדרות הקול
     try {
       await _tts.setLanguage(_language);
-      // מגדיר את שפת הדיבור במנוע ה-TTS
-
       await _tts.setSpeechRate(_speechRate.clamp(0.1, 2.0));
-      // מגדיר את מהירות הדיבור עם הגבלה לטווח תקין
-
-      if (_selectedVoice != null) {
-        await _tts.setVoice({'name': _selectedVoice!});
-        // מגדיר את הקול הנבחר במנוע ה-TTS
-      }
-
+      if (_selectedVoice != null) await _tts.setVoice({'name': _selectedVoice!});
       await _alertService.updateSettings(
         language: _language,
         speechRate: _speechRate,
         voiceAlertsEnabled: true,
       );
-      // מעדכן גם את שירות ההתראות עם אותן הגדרות
-
     } catch (e) {
-      if (kDebugMode) debugPrint('TTS settings error: $e');
-      // מדפיס את השגיאה רק במצב debug
+      _debug('TTS settings error', e);
     }
-  }
-
-  Future<void> _resumeListening() async {
-    if (!mounted) return;
-    if (_voiceService.isListening) return;
-
-    while (_alertService.isSpeaking) {
-      await Future.delayed(const Duration(milliseconds: 150));
-      if (!mounted) return;
-    }
-    // חכה שה-TTS יסיים לגמרי לפני שמאזינים לפקודות קוליות
-
-    await _voiceService.startListening(
-      _handleVoiceCommand,
-      localeId: _isHebrew ? 'iw_IL' : 'en_US',
-      // שפת זיהוי הקול לפי הגדרת המשתמש
-
-      onError: () async {
-        // אחרי כל שגיאה מתחילים מחדש אוטומטית
-        if (!mounted) return;
-        await Future.delayed(const Duration(milliseconds: 500));
-        await _resumeListening();
-      },
-    );
   }
 
   Future<void> _startDetection() async {
-    // פונקציה שמתחילה את תהליך הזיהוי
     if (!_isInitialized || _isRunning) return;
-    // אם המערכת לא אותחלה או שכבר פועלת - לא ממשיכים
 
     await _alertService.speakSystemStarted();
-    // משמיע הודעה שהמערכת התחילה
+    await Future.delayed(const Duration(milliseconds: 500));
 
     if (_vibrationEnabled && (await Vibration.hasVibrator() ?? false)) {
-      Vibration.vibrate(duration: 100);
-      // מרטיט לזמן קצר כסימן להתחלה
+      await Vibration.vibrate(duration: 100);
     }
 
     setState(() => _isRunning = true);
-    // מעדכן שהמערכת כרגע רצה
 
     await _cameraService.startStream((CameraImage image) async {
-      // מתחיל stream מהמצלמה; כל פריים נכנס לכאן
+      if (!_isRunning || _isProcessingFrame) return;
+      _isProcessingFrame = true;
 
-      final detections = await _yoloService.detectObjects(
-        image.planes.map((plane) => plane.bytes).toList(),
-        image.height,
-        image.width,
-      );
-      // שולח את הפריים למודל הזיהוי
+      try {
+        final bytesList = image.planes.map((plane) => plane.bytes).toList();
+        final detections = await _yoloService.detectObjects(bytesList, image.height, image.width);
 
-      _riskScoringService.updateResolution(image.width, image.height);
-      // מעדכן את הרזולוציה לשירות הסיכון
+        _riskScoringService.updateResolution(image.width, image.height);
+        final scored = _riskScoringService.scoreDetections(detections);
+        final top = scored.isNotEmpty ? scored.first : null;
 
-      final scored = _riskScoringService.scoreDetections(detections);
-      // מחשב ניקוד סיכון לכל זיהוי
+        if (!mounted) return;
 
-      final top = scored.isNotEmpty ? scored.first : null;
-      // בוחר את האובייקט הכי מסוכן, או null אם אין
+        // 🖥️ עדכון תצוגה חכם
+        final shouldUpdateDisplay = _displayManager.shouldUpdateDisplay(
+          hasCurrentObject: _currentMostDangerous != null,
+          newRisk: top?.riskScore,
+          currentRisk: _currentMostDangerous?.riskScore,
+        );
 
-      if (!mounted) return;
-      // אם המסך כבר לא קיים - עוצרים
+        if (shouldUpdateDisplay) {
+          setState(() {
+            _currentMostDangerous = top;
+            if (top != null) _displayManager.markDisplayStart();
+            else _displayManager.clearDisplayStart();
+          });
+        }
 
-      final shouldUpdateDisplay = _displayManager.shouldUpdateDisplay(
-        hasCurrentObject: _currentMostDangerous != null,
-        newRisk: top?.riskScore,
-        currentRisk: _currentMostDangerous?.riskScore,
-      );
-      // בודק האם לעדכן את התצוגה לפי לוגיקת זמן מינימלי
+        if (top == null) return;
 
-      if (shouldUpdateDisplay) {
-        setState(() {
-          _currentMostDangerous = top;
-          // שומר את האובייקט הכי מסוכן החדש
+        final alertLevel = _getAlertLevel(top);
+        if (alertLevel == _AlertLevel.none) return;
 
-          if (top != null) {
-            _displayManager.markDisplayStart();
-            // מסמן התחלת זמן תצוגה חדש
-          } else {
-            _displayManager.clearDisplayStart();
-            // מאפס אם אין אובייקט
-          }
-        });
+        if (!_cooldownManager.canAlert(top.tag)) return;
+
+        await _handleVibration(top.tag);
+        if (alertLevel == _AlertLevel.vibrationOnly) {
+          _cooldownManager.markAlerted(top.tag);
+          return;
+        }
+
+        if (alertLevel == _AlertLevel.beepAndVoice) {
+          await _player.play(AssetSource('beep.mp3'));
+          await Future.delayed(const Duration(milliseconds: 250));
+        }
+
+        final spoken = await _alertService.trySpeakDetection(top, currentRisk: _currentMostDangerous?.riskScore);
+        if (spoken || alertLevel == _AlertLevel.voiceOnly || alertLevel == _AlertLevel.beepAndVoice) {
+          _cooldownManager.markAlerted(top.tag);
+        }
+
+      } catch (e, stack) {
+        _debug('Frame processing error', e, stack);
+      } finally {
+        _isProcessingFrame = false;
       }
-
-      if (top == null) return;
-      // אין אובייקט → אין מה לבדוק
-
-      final alertLevel = _getAlertLevel(top);
-      // בודק איזו רמת התראה מתאימה לציון הסיכון
-
-      if (alertLevel == _AlertLevel.none) return;
-      // מתחת לסף המינימלי → שקט לגמרי
-
-      if (!_cooldownManager.canAlert(top.tag)) return;
-      // עדיין בזמן המתנה עבור אובייקט זה → לא מתריעים שוב
-
-      _cooldownManager.markAlerted(top.tag);
-      // מסמן שכבר התרענו על התג הזה
-
-      await _handleVibration(top.tag);
-      // מפעיל רטט לפי סוג האובייקט (קיים בכל הרמות מעל none)
-
-      if (alertLevel == _AlertLevel.vibrationOnly) return;
-      // רמת רטט בלבד → לא מדברים
-
-      // רמת קול: עוצרים האזנה לפני שמדברים
-      await _voiceService.stopListening();
-      // חשוב כדי למנוע מצב שהאפליקציה שומעת את עצמה
-
-      if (alertLevel == _AlertLevel.beepAndVoice) {
-        await _player.play(AssetSource('beep.mp3'));        // צפצוף לפני ההכרזה – מתריע שמדובר בסכנה גבוהה
-        await Future.delayed(const Duration(milliseconds: 300));
-        // המתנה קצרה בין הצפצוף להכרזה הקולית
-      }
-
-      final currentRisk = _currentMostDangerous?.riskScore;
-      // שומר את רמת הסיכון הנוכחית לפני ההשמעה
-
-      await _alertService.trySpeakDetection(top, currentRisk: currentRisk);
-      // מנסה להשמיע התראה קולית עם שם האובייקט
-
-      await Future.delayed(const Duration(milliseconds: 300));
-      await _resumeListening();
-      // מחזיר את ההאזנה לפקודות קוליות
     });
   }
 
-  /// מחזיר רמת התראה לפי סיכון והתקרבות בלבד
+  /// מחזיר רמת התראה לפי ציון הסיכון בלבד (לפי הטבלה המבוקשת)
   _AlertLevel _getAlertLevel(Detection detection) {
-    final double riskScore = detection.riskScore; // לוקח את ציון הסיכון
+    final double riskScore = detection.riskScore;
 
-    if (!detection.isApproaching) { // אם אין התקרבות (לא גדל ולא זז למטה)
-      return _AlertLevel.none; // לא מתריעים בכלל
+    // 🟢 0–30: ללא התראה
+    if (riskScore < 30.0) {
+      return _AlertLevel.none;
     }
 
-    if (riskScore >= _beepAlertThreshold) { // סיכון גבוה מאוד
-      return _AlertLevel.beepAndVoice; // רטט + צפצוף + קול
+    // 🟡 30–40: רטט בלבד
+    if (riskScore < 40.0) {
+      return _AlertLevel.vibrationOnly;
     }
 
-    if (riskScore >= _voiceAlertThreshold) { // סיכון בינוני
-      return _AlertLevel.voiceOnly; // רטט + קול
+    // 🟠 40–65: רטט + קול
+    if (riskScore < 65.0) {
+      return _AlertLevel.voiceOnly;
     }
 
-    if (riskScore >= _vibrationOnlyThreshold) { // סיכון נמוך
-      return _AlertLevel.vibrationOnly; // רטט בלבד
-    }
-
-    return _AlertLevel.none; // מתחת לסף – אין התראה
+    // 🔴 65+: רטט + צפצוף + קול
+    return _AlertLevel.beepAndVoice;
   }
 
-  void _handleVoiceCommand(String command) {
-    // פונקציה שמקבלת טקסט מזוהה מהקול ומחליטה איזו פעולה לבצע
-
-    if (kDebugMode) debugPrint('🎤 נשמע: "$command"');
-
-    final text = command
-        .toLowerCase()
-    // מסיר סימנים לא רלוונטיים (פסיקים, סימני קריאה וכו')
-        .replaceAll(RegExp(r'[^\u0590-\u05FFa-zA-Z\s]'), ' ')
-    // מנקה רווחים כפולים
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-
-    if (kDebugMode) debugPrint('🧠 אחרי ניקוי: "$text"');
-
-    // ==============================
-    // 🔹 זיהוי מילים "חכמות"
-    // ==============================
-
-    // מילים שמצביעות על פעולה של התחלה
-    final hasStartWord =
-        text.contains('הפעל') ||
-            text.contains('תפעיל') ||
-            text.contains('התחל') ||
-            text.contains('תתחיל') ||
-            text.contains('מתחיל') ||
-            text.contains('התחיל') ||
-            text.contains('הפעלת') ||
-            text.contains('תדליק') ||
-            text.contains('הדלק');
-
-    // מילים שמצביעות על עצירה
-    final hasStopWord =
-        text.contains('עצור') ||
-            text.contains('תעצור') ||
-            text.contains('הפסק') ||
-            text.contains('תפסיק') ||
-            text.contains('כבה') ||
-            text.contains('תכבה') ||
-            text.contains('אל') || // חשוב! המודל מזהה לפעמים "אל"
-            text.contains('די') ||
-            text.contains('מספיק');
-
-    // מילים שמצביעות על זיהוי (context)
-    final hasDetectionWord =
-        text.contains('זיהוי') ||
-            text.contains('זהוי') || // טעות כתיב נפוצה
-            text.contains('לזהות');
-
-    // מילים לפתיחת הגדרות
-    final hasSettingsWord =
-        text.contains('הגדרות') ||
-            text.contains('הגדרה') ||
-            text.contains('settings');
-
-    // מילים להפעלת רטט
-    final hasVibrationOn =
-        text.contains('רטט') &&
-            (text.contains('הפעל') ||
-                text.contains('תפעיל') ||
-                text.contains('הדלק') ||
-                text.contains('תדליק'));
-
-    // מילים לכיבוי רטט
-    final hasVibrationOff =
-        text.contains('רטט') &&
-            (text.contains('כבה') ||
-                text.contains('תכבה') ||
-                text.contains('עצור') ||
-                text.contains('תפסיק'));
-
-    // ==============================
-    // 🔹 לוגיקה של פעולות
-    // ==============================
-
-    // הפעלת זיהוי
-    if (hasDetectionWord && hasStartWord) {
-      if (kDebugMode) debugPrint('✅ זוהתה פקודת START');
-
-      if (!_isRunning) {
-        _startDetection();
-      }
-      return;
-    }
-
-    // עצירת זיהוי
-    if (hasDetectionWord && hasStopWord) {
-      if (kDebugMode) debugPrint('🛑 זוהתה פקודת STOP');
-
-      if (_isRunning) {
-        _stopDetection();
-      }
-      return;
-    }
-
-    // פתיחת הגדרות
-    if (hasSettingsWord) {
-      if (kDebugMode) debugPrint('⚙️ זוהתה פקודת SETTINGS');
-
-      _openSettings();
-      return;
-    }
-
-    // הפעלת רטט
-    if (hasVibrationOn) {
-      if (kDebugMode) debugPrint('📳 זוהתה הפעלת רטט');
-
-      setState(() => _vibrationEnabled = true);
-      return;
-    }
-
-    // כיבוי רטט
-    if (hasVibrationOff) {
-      if (kDebugMode) debugPrint('🔇 זוהתה כיבוי רטט');
-
-      setState(() => _vibrationEnabled = false);
-      return;
-    }
-  }
   Future<void> _handleVibration(String tag) async {
-    // פונקציה שמפעילה רטט בהתאם לסוג האובייקט שזוהה
     if (!_vibrationEnabled) return;
-    // אם המשתמש כיבה רטט → לא עושים כלום
-
     final now = DateTime.now();
-    if (_lastVibrationTime != null &&
-        now.difference(_lastVibrationTime!) < _vibrationCooldown) {
-      return;
-      // אם לא עבר מספיק זמן מאז הרטט האחרון → לא מרטיטים שוב
-    }
+    if (_lastVibrationTime != null && now.difference(_lastVibrationTime!) < _vibrationCooldown) return;
 
     try {
       if (!(await Vibration.hasVibrator() ?? false)) return;
-      // אם למכשיר אין רטט → יוצאים
 
-      int duration; // משך הרטט (במילישניות)
-
+      int duration;
       switch (tag) {
-        case 'car':
-        case 'bus':
-        case 'truck':
-        case 'train':
-        case 'motorcycle':
-          duration = 400;
-          break;
-      // רכבים → רטט ארוך (מסוכן יותר)
-
-        case 'person':
-        case 'bicycle':
-        case 'skateboard':
-          duration = 250;
-          break;
-      // אנשים/תחבורה קלה → בינוני
-
-        case 'traffic light':
-        case 'stop sign':
-        case 'fire hydrant':
-          duration = 150;
-          break;
-      // תמרורים ותשתית → קצר
-
-        case 'dog':
-        case 'cat':
-        case 'horse':
-        case 'sheep':
-        case 'cow':
-        case 'elephant':
-        case 'bear':
-        case 'zebra':
-        case 'giraffe':
-        case 'bird':
-          duration = 200;
-          break;
-      // בעלי חיים → בינוני
-
-        case 'bench':
-        case 'chair':
-        case 'couch':
-        case 'bed':
-        case 'dining table':
-        case 'potted plant':
-          duration = 300;
-          break;
-      // ריהוט → בינוני-גבוה
-
-        case 'backpack':
-        case 'handbag':
-        case 'suitcase':
-        case 'umbrella':
-          duration = 180;
-          break;
-      // חפצים אישיים → בינוני-נמוך
-
-        case 'skis':
-        case 'sports ball':
-        case 'surfboard':
-        case 'tennis racket':
-          duration = 120;
-          break;
-      // ציוד ספורט → קצר
-
-        default:
-          duration = 100;
-      // ברירת מחדל → רטט קצר מאוד
+        case 'car': case 'bus': case 'truck': case 'train': case 'motorcycle':
+        duration = 400; break;
+        case 'person': case 'bicycle': case 'scooter': case 'skateboard':
+        duration = 250; break;
+        case 'traffic light': case 'stop sign': case 'fire hydrant': case 'crosswalk':
+        duration = 150; break;
+        case 'dog': case 'cat': case 'horse': case 'sheep': case 'cow':
+        case 'elephant': case 'bear': case 'zebra': case 'giraffe': case 'bird':
+        duration = 200; break;
+        case 'bench': case 'chair': case 'couch': case 'bed':
+        case 'dining table': case 'potted plant':
+        duration = 300; break;
+        case 'backpack': case 'handbag': case 'suitcase': case 'umbrella':
+        duration = 180; break;
+        case 'skis': case 'sports ball': case 'surfboard': case 'tennis racket':
+        duration = 120; break;
+        default: duration = 100;
       }
 
       await Vibration.vibrate(duration: duration);
-      // הפעלת הרטט בפועל
-
       _lastVibrationTime = now;
-      // שמירת זמן הרטט האחרון כדי למנוע spam
-
     } catch (e) {
-      if (kDebugMode) debugPrint('Vibration error: $e');
-      // הדפסת שגיאה רק במצב debug
+      _debug('Vibration error', e);
     }
   }
 
   Future<void> _stopDetection() async {
-    // פונקציה שמפסיקה את תהליך הזיהוי וכל השירותים הקשורים אליו
     if (!_isRunning) return;
-    // אם המערכת לא רצה כרגע - אין מה לעצור
+    setState(() => _isRunning = false);
 
     await _cameraService.stopStream();
-    // עוצר את זרם הפריימים מהמצלמה
-
-    await _voiceService.stopListening();
-    // עוצר את ההאזנה לפקודות קוליות
-
-    _alertService.resetSpeakingState();
-    // מאפס מצב דיבור והתראות
-
+    await _player.stop();
+    await _alertService.stop();
     _riskScoringService.reset();
-    // מאפס את שירות חישוב הסיכון
+    _cooldownManager.clear();
+    _displayManager.clearDisplayStart();
 
+    setState(() => _currentMostDangerous = null);
     await _alertService.speakSystemStopped();
-    // משמיע הודעה קולית שהמערכת הופסקה
-
-    setState(() {
-      _isRunning = false;
-      // מעדכן שהמערכת כבר לא פועלת
-
-      _currentMostDangerous = null;
-      // מאפס את האובייקט המסוכן המוצג
-
-      _displayManager.clearDisplayStart();
-      // מאפס את זמן תחילת התצוגה
-    });
-
-    await Future.delayed(const Duration(milliseconds: 800));
-    await _resumeListening();
-    // מחזיר האזנה לפקודות קוליות
   }
 
   Future<void> _openSettings() async {
     await Navigator.of(context).push(
-      // פותח מסך חדש מעל המסך הנוכחי
       MaterialPageRoute(
         builder: (_) => SettingsScreen(
           speechRate: _speechRate,
@@ -633,25 +314,17 @@ class _MainScreenState extends State<MainScreen> {
           language: _language,
           voices: _voices,
           selectedVoice: _selectedVoice,
-
           onVoiceTest: () async {
-            // callback לבדיקת קול מתוך מסך ההגדרות
             await _applyTtsSettings();
             await _alertService.speakVoiceTest();
           },
-
           onChanged: (speechRate, vibrationEnabled, language, selectedVoice) async {
-            // callback שמקבל ערכים חדשים ממסך ההגדרות
             _speechRate = speechRate;
             _vibrationEnabled = vibrationEnabled;
             _language = language;
             _selectedVoice = selectedVoice;
-
             await _applyTtsSettings();
-            // מחיל בפועל את ההגדרות החדשות
-
             if (mounted) setState(() {});
-            // אם המסך עדיין קיים - מבצע rebuild
           },
         ),
       ),
@@ -659,18 +332,13 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   String _localizedObjectName() {
-    // מחזיר את שם האובייקט המסוכן בשפה הנוכחית, או הודעה שאין אובייקט
     if (_currentMostDangerous == null) {
-      return _isHebrew
-          ? 'אין אובייקט מסוכן כרגע'
-          : 'No dangerous object detected';
+      return _isHebrew ? 'אין אובייקט מסוכן כרגע' : 'No dangerous object detected';
     }
     return _alertService.localizedLabel(_currentMostDangerous!.tag);
-    // מחזיר את שם האובייקט המתורגם דרך AlertService
   }
 
   String _localizedRiskLevel(double riskScore) {
-    // ממיר ציון סיכון מספרי לטקסט מתאים בשפה הנוכחית
     if (_isHebrew) {
       if (riskScore >= 75) return 'גבוהה';
       if (riskScore >= 50) return 'בינונית';
@@ -682,31 +350,26 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Color _riskColor(double? riskScore) {
-    // מחזיר צבע בהתאם לרמת הסיכון
-    if (riskScore == null) return Colors.grey; // אין ציון - אפור
-    if (riskScore >= 75) return const Color(0xFFFF5A5F); // גבוה - אדום
-    if (riskScore >= 50) return const Color(0xFFFFA726); // בינוני - כתום
-    return const Color(0xFF66BB6A); // נמוך - ירוק
+    if (riskScore == null) return Colors.grey;
+    if (riskScore >= 75) return const Color(0xFFFF5A5F);
+    if (riskScore >= 50) return const Color(0xFFFFA726);
+    return const Color(0xFF66BB6A);
   }
 
   @override
   void dispose() {
     _accelerometerSubscription?.cancel();
-    // ביטול האזנה לאקסלרומטר כדי למנוע דליפת זיכרון
-
-    _cameraService.dispose(); // שחרור משאבי המצלמה
-    _yoloService.dispose(); // שחרור משאבי מודל הזיהוי
-    _alertService.stop(); // עצירת דיבור/התראות
-    _tts.stop(); // עצירת מנוע TTS המקומי
-    _voiceService.dispose(); // עצירת האזנה לפקודות קוליות
-    super.dispose(); // קריאה ל-dispose של המחלקה האב
+    _cameraService.dispose();
+    _yoloService.dispose();
+    _alertService.stop();
+    _player.dispose();
+    _tts.stop();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // פונקציה שמחזירה את ה-UI של המסך בכל רגע נתון
     if (!_isInitialized) {
-      // אם המערכת עדיין לא אותחלה → מציג מסך טעינה
       return Scaffold(
         backgroundColor: const Color(0xFF0F1115),
         body: Center(
@@ -714,12 +377,9 @@ class _MainScreenState extends State<MainScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const CircularProgressIndicator(color: primaryColor),
-              // עיגול טעינה
               const SizedBox(height: 16),
-              Text(
-                _isHebrew ? 'מאתחל מערכת...' : 'Initializing...',
-                style: const TextStyle(color: Colors.white70),
-              ),
+              Text(_isHebrew ? 'מאתחל מערכת...' : 'Initializing...',
+                  style: const TextStyle(color: Colors.white70)),
             ],
           ),
         ),
@@ -729,31 +389,18 @@ class _MainScreenState extends State<MainScreen> {
     final buttonText = _isRunning
         ? (_isHebrew ? 'עצור זיהוי' : 'Stop')
         : (_isHebrew ? 'הפעל זיהוי' : 'Start');
-    // טקסט הכפתור לפי מצב המערכת והשפה
-
     final objectText = _localizedObjectName();
-    // שם האובייקט המסוכן (או הודעה שאין)
-
     final currentRiskScore = _currentMostDangerous?.riskScore;
-    // ציון הסיכון (יכול להיות null)
-
     final currentRiskColor = _riskColor(currentRiskScore);
-    // צבע בהתאם לרמת הסיכון
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F1115), // צבע רקע כהה
+      backgroundColor: const Color(0xFF0F1115),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F1115),
         elevation: 0,
         scrolledUnderElevation: 0,
-        title: const Text(
-          'Safe Step',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 22,
-          ),
-        ),
+        title: const Text('Safe Step',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22)),
         actions: [
           Padding(
             padding: const EdgeInsetsDirectional.only(end: 8),
@@ -762,9 +409,7 @@ class _MainScreenState extends State<MainScreen> {
               borderRadius: BorderRadius.circular(12),
               child: IconButton(
                 onPressed: _openSettings,
-                // בלחיצה פותח את מסך ההגדרות
-                icon: const Icon(Icons.settings_rounded,
-                    color: Colors.white, size: 22),
+                icon: const Icon(Icons.settings_rounded, color: Colors.white, size: 22),
                 padding: const EdgeInsets.all(8),
               ),
             ),
@@ -772,20 +417,15 @@ class _MainScreenState extends State<MainScreen> {
         ],
       ),
       body: SafeArea(
-        // מונע חפיפה עם notch/סטטוס בר
         child: SingleChildScrollView(
-          // מאפשר גלילה אם התוכן גדול מהמסך
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Column(
             children: [
               _buildMainButton(buttonText),
-              // כפתור הפעלה/עצירה
               const SizedBox(height: 16),
               _buildDangerCard(objectText, currentRiskColor),
-              // כרטיס שמציג את האובייקט והסיכון
               const SizedBox(height: 16),
               _buildStatusRow(),
-              // שורת סטטוס (רטט + שפה)
             ],
           ),
         ),
@@ -794,37 +434,22 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildMainButton(String buttonText) {
-    // פונקציה שבונה את כפתור ההפעלה הראשי
     return SizedBox(
-      width: double.infinity, // הכפתור תופס את כל הרוחב
+      width: double.infinity,
       height: 120,
       child: ElevatedButton(
         onPressed: _isRunning ? _stopDetection : _startDetection,
-        // אם המערכת רצה → עוצר, אחרת → מפעיל
-
         style: ElevatedButton.styleFrom(
           backgroundColor: primaryColor,
           foregroundColor: Colors.white,
           elevation: 2,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          textStyle: const TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.bold,
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          textStyle: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
         ),
-
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              _isRunning
-                  ? Icons.stop_circle_rounded
-                  : Icons.play_circle_fill_rounded,
-              // אייקון עצור או הפעל לפי המצב
-              size: 40,
-            ),
+            Icon(_isRunning ? Icons.stop_circle_rounded : Icons.play_circle_fill_rounded, size: 40),
             const SizedBox(width: 16),
             Text(buttonText),
           ],
@@ -834,83 +459,40 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildDangerCard(String objectText, Color currentRiskColor) {
-    // פונקציה שבונה כרטיס שמציג את האובייקט המסוכן ביותר והמידע עליו
     return _glassCard(
       child: Column(
         children: [
-          Text(
-            _isHebrew ? 'האובייקט המסוכן ביותר' : 'Most dangerous object',
-            style: const TextStyle(
-              fontSize: 16,
-              color: Colors.white70,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-
+          Text(_isHebrew ? 'האובייקט המסוכן ביותר' : 'Most dangerous object',
+              style: const TextStyle(fontSize: 16, color: Colors.white70, fontWeight: FontWeight.w500)),
           const SizedBox(height: 16),
-
           AnimatedContainer(
             duration: const Duration(milliseconds: 250),
-            // אנימציה חלקה כשמשתנה צבע הסיכון
-            width: 88,
-            height: 88,
+            width: 88, height: 88,
             decoration: BoxDecoration(
               color: currentRiskColor.withOpacity(0.14),
-              // צבע רקע שקוף לפי רמת הסיכון
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              Icons.warning_amber_rounded,
-              color: currentRiskColor,
-              size: 46,
-            ),
+            child: Icon(Icons.warning_amber_rounded, color: currentRiskColor, size: 46),
           ),
-
           const SizedBox(height: 18),
-
-          Text(
-            objectText,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 30,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
-          ),
-
+          Text(objectText, textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold, color: Colors.white)),
           const SizedBox(height: 18),
-
           if (_currentMostDangerous != null) ...[
-            // אם יש אובייקט מזוהה → מציגים נתונים
-            _buildMetricTile(
-              title: _isHebrew ? 'רמת סיכון' : 'Risk level',
-              value: _localizedRiskLevel(_currentMostDangerous!.riskScore),
-              valueColor: currentRiskColor,
-              icon: Icons.shield_rounded,
-            ),
+            _buildMetricTile(title: _isHebrew ? 'רמת סיכון' : 'Risk level',
+                value: _localizedRiskLevel(_currentMostDangerous!.riskScore),
+                valueColor: currentRiskColor, icon: Icons.shield_rounded),
             const SizedBox(height: 10),
-            _buildMetricTile(
-              title: _isHebrew ? 'רמת זיהוי' : 'Detection confidence',
-              value:
-              '${(_currentMostDangerous!.confidence * 100).toStringAsFixed(0)}%',
-              // הופך ערך 0-1 לאחוזים
-              icon: Icons.analytics_rounded,
-            ),
+            _buildMetricTile(title: _isHebrew ? 'רמת זיהוי' : 'Detection confidence',
+                value: '${(_currentMostDangerous!.confidence * 100).toStringAsFixed(0)}%',
+                icon: Icons.analytics_rounded),
             const SizedBox(height: 10),
-            _buildMetricTile(
-              title: _isHebrew ? 'ניקוד סיכון' : 'Risk score',
-              value: _currentMostDangerous!.riskScore.toStringAsFixed(1),
-              // ציון עם ספרה אחת אחרי הנקודה
-              icon: Icons.bar_chart_rounded,
-            ),
+            _buildMetricTile(title: _isHebrew ? 'ניקוד סיכון' : 'Risk score',
+                value: _currentMostDangerous!.riskScore.toStringAsFixed(1),
+                icon: Icons.bar_chart_rounded),
           ] else ...[
-            // אם אין אובייקט מזוהה
-            Text(
-              _isHebrew
-                  ? 'המערכת ממתינה לזיהוי חדש.'
-                  : 'The system is waiting for a new detection.',
-              style: const TextStyle(fontSize: 15, color: Colors.white70),
-            ),
+            Text(_isHebrew ? 'המערכת ממתינה לזיהוי חדש.' : 'The system is waiting for a new detection.',
+                style: const TextStyle(fontSize: 15, color: Colors.white70)),
           ],
         ],
       ),
@@ -918,149 +500,78 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildStatusRow() {
-    // פונקציה שבונה שורת סטטוס קטנה שמציגה מידע על רטט ושפה
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: const Color(0xFF171B22),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withOpacity(0.05)),
-        // מסגרת דקה כמעט שקופה
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
-        // מפזר את האלמנטים באופן שווה
         children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.vibration,
-                size: 18,
-                color: _vibrationEnabled
-                    ? const Color(0xFFBA68C8)
-                // רטט פעיל → סגול
-                    : Colors.grey.withOpacity(0.4),
-                // רטט כבוי → אפור שקוף
-              ),
-              const SizedBox(width: 6),
-              Text(
-                _isHebrew
-                    ? 'רטט: ${_vibrationEnabled ? "פעיל" : "כבוי"}'
-                    : 'Vib: ${_vibrationEnabled ? "On" : "Off"}',
-                style: const TextStyle(fontSize: 13, color: Colors.white),
-              ),
-            ],
-          ),
-
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.vibration, size: 18,
+                color: _vibrationEnabled ? const Color(0xFFBA68C8) : Colors.grey.withOpacity(0.4)),
+            const SizedBox(width: 6),
+            Text(_isHebrew ? 'רטט: ${_vibrationEnabled ? "פעיל" : "כבוי"}' : 'Vib: ${_vibrationEnabled ? "On" : "Off"}',
+                style: const TextStyle(fontSize: 13, color: Colors.white)),
+          ]),
           Container(width: 1, height: 20, color: Colors.white.withOpacity(0.2)),
-          // קו הפרדה אנכי בין שני החלקים
-
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.language_rounded,
-                  size: 18, color: Color(0xFF64B5F6)),
-              // אייקון שפה בצבע כחול
-              const SizedBox(width: 6),
-              Text(
-                _isHebrew ? 'שפה: עברית' : 'Lang: English',
-                style: const TextStyle(fontSize: 13, color: Colors.white),
-              ),
-            ],
-          ),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.language_rounded, size: 18, color: Color(0xFF64B5F6)),
+            const SizedBox(width: 6),
+            Text(_isHebrew ? 'שפה: עברית' : 'Lang: English',
+                style: const TextStyle(fontSize: 13, color: Colors.white)),
+          ]),
         ],
       ),
     );
   }
 
   Widget _glassCard({required Widget child}) {
-    // פונקציה שבונה כרטיס מעוצב עם עיצוב אחיד
     return Container(
       padding: const EdgeInsets.all(20),
-      // רווח פנימי מכל הצדדים
       decoration: BoxDecoration(
         color: const Color(0xFF171B22),
         borderRadius: BorderRadius.circular(26),
-        // פינות מעוגלות מאוד
         border: Border.all(color: Colors.white.withOpacity(0.05)),
-        // מסגרת דקה כמעט שקופה
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.22),
-            blurRadius: 18,
-            // צל מטושטש
-            offset: const Offset(0, 10),
-            // הצל יורד למטה
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.22), blurRadius: 18, offset: const Offset(0, 10))],
       ),
       child: child,
     );
   }
 
   Widget _buildMetricTile({
-    required String title, // כותרת המדד
-    required String value, // ערך המדד
-    required IconData icon, // האייקון
-    Color valueColor = Colors.white, // צבע הערך (ברירת מחדל לבן)
+    required String title,
+    required String value,
+    required IconData icon,
+    Color valueColor = Colors.white,
   }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.04),
-        // רקע לבן מאוד שקוף
         borderRadius: BorderRadius.circular(18),
       ),
       child: Row(
         children: [
           Container(
-            width: 42,
-            height: 42,
+            width: 42, height: 42,
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.06),
               borderRadius: BorderRadius.circular(14),
             ),
             child: Icon(icon, color: primaryColor, size: 22),
-            // אייקון בצבע כתום
           ),
           const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              title,
-              style: const TextStyle(
-                fontSize: 15,
-                color: Colors.white70,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
-              color: valueColor,
-              // צבע דינמי לפי רמת הסיכון
-            ),
-          ),
+          Expanded(child: Text(title,
+              style: const TextStyle(fontSize: 15, color: Colors.white70, fontWeight: FontWeight.w500))),
+          Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: valueColor)),
         ],
       ),
     );
   }
 }
 
-/// רמות ההתראה האפשריות לפי ציון הסיכון
-enum _AlertLevel {
-  none,
-  // מתחת ל-30: שקט לגמרי
-
-  vibrationOnly,
-  // 30–40: רטט בלבד, ללא קול
-
-  voiceOnly,
-  // 40–65: רטט + שם האובייקט בקול
-
-  beepAndVoice,
-  // מעל 65: רטט + צפצוף + שם האובייקט בקול
-}
+enum _AlertLevel { none, vibrationOnly, voiceOnly, beepAndVoice }
