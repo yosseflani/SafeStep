@@ -1,58 +1,37 @@
 import 'package:flutter/foundation.dart';
-// ייבוא כלים כמו debugPrint ו-kDebugMode
-
 import 'package:flutter_tts/flutter_tts.dart';
-// ספרייה להמרת טקסט לדיבור (Text To Speech)
-
 import '../models/detection.dart';
-// ייבוא מודל Detection (האובייקט שזוהה)
 
 class AlertService {
-  // מחלקה שאחראית על כל ההתראות הקוליות
-
   final FlutterTts _tts = FlutterTts();
-  // אובייקט של מנוע דיבור
 
   String _language = 'he-IL';
-  // שפה נוכחית
-
   double _speechRate = 0.5;
-  // מהירות דיבור
-
   bool _voiceAlertsEnabled = true;
-  // האם התראות קוליות מופעלות
 
-  // מעקב אחר סטטוס דיבור
   bool _isSpeaking = false;
-  // האם כרגע יש דיבור פעיל
-
   bool get isSpeaking => _isSpeaking;
-  // מאפשר לבדוק מבחוץ אם מדברים
+
+  DateTime? _speakingStartTime;
+  static const Duration _maxSpeakingDuration = Duration(seconds: 5);
 
   Detection? _pendingHighPriorityAlert;
-  // התראה חשובה שממתינה (אם צריך לדבר עליה אחרי הנוכחית)
 
   Future<void> initialize({
     required String language,
     required double speechRate,
     required bool voiceAlertsEnabled,
   }) async {
-    // אתחול ראשוני של השירות
-
     _language = language;
     _speechRate = speechRate.clamp(0.1, 2.0);
-    // מגביל את מהירות הדיבור לטווח תקין
-
     _voiceAlertsEnabled = voiceAlertsEnabled;
 
     await _safeSetLanguage(_language);
-    // מגדיר שפה בצורה בטוחה
-
     await _tts.setSpeechRate(_speechRate);
-    // מגדיר מהירות דיבור
-
     await _tts.awaitSpeakCompletion(true);
-    // מחכה שהדיבור יסתיים לפני המשך
+    _registerHandlers();
+
+    _debug('✅ initialized (lang: $_language, rate: $_speechRate)');
   }
 
   Future<void> updateSettings({
@@ -60,197 +39,242 @@ class AlertService {
     required double speechRate,
     required bool voiceAlertsEnabled,
   }) async {
-    // עדכון הגדרות בזמן ריצה
-
     _language = language;
     _speechRate = speechRate.clamp(0.1, 2.0);
     _voiceAlertsEnabled = voiceAlertsEnabled;
 
     await _safeSetLanguage(_language);
     await _tts.setSpeechRate(_speechRate);
+    _registerHandlers();
   }
 
-  // מגדיר שפה בצורה בטוחה עם fallback לאנגלית
-  Future<void> _safeSetLanguage(String language) async {
-    try {
-      final result = await _tts.setLanguage(language);
-      // מנסה להגדיר שפה
+  void _registerHandlers() {
+    _tts.setCompletionHandler(() {
+      _debug('speech completed');
+      _resetSpeakingState();
+      _processPendingAlert();
+    });
 
-      if (result != 1 && kDebugMode) {
-        debugPrint('Warning: Language $language not fully supported');
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('TTS language error: $e');
-      await _tts.setLanguage('en-US');
-      // fallback לאנגלית אם יש שגיאה
-    }
+    _tts.setErrorHandler((msg) {
+      _debug('speech error: $msg');
+      _resetSpeakingState();
+      _processPendingAlert();
+    });
+
+    _tts.setCancelHandler(() {
+      _debug('speech cancelled');
+      _resetSpeakingState();
+    });
   }
 
   Future<void> speakSystemStarted() async {
-    // משמיע הודעה כשהמערכת מתחילה
-
     if (!_voiceAlertsEnabled) return;
-
-    await _tts.speak(
+    await _speakSystemMessage(
       _language.startsWith('he') ? 'המערכת הופעלה' : 'System started',
     );
   }
 
   Future<void> speakSystemStopped() async {
-    // משמיע הודעה כשהמערכת נעצרת
-
     if (!_voiceAlertsEnabled) return;
-
-    await _tts.speak(
+    await _speakSystemMessage(
       _language.startsWith('he') ? 'המערכת הופסקה' : 'System stopped',
     );
   }
 
-  // בדיקת קול - עובדת תמיד גם אם התראות כבויות
   Future<void> speakVoiceTest() async {
-    await _tts.speak(
+    await _speakSystemMessage(
       _language.startsWith('he') ? 'זוהי בדיקת קול' : 'This is a voice test',
     );
   }
 
-  /// השמעת התראה עם לוגיקה חכמה
-  Future<bool> trySpeakDetection(Detection detection, {double? currentRisk}) async {
+  Future<void> _speakSystemMessage(String message) async {
+    if (_isSpeakingStuck()) {
+      await _tts.stop();
+      _resetSpeakingState();
+    }
+
+    if (_isSpeaking) {
+      await _tts.stop();
+      _resetSpeakingState();
+    }
+
+    _isSpeaking = true;
+    _speakingStartTime = DateTime.now();
+
+    try {
+      _debug('system speaking: "$message"');
+      await _tts.speak(message);
+    } catch (e) {
+      _debug('system message failed: $e');
+    } finally {
+      _resetSpeakingState();
+      _processPendingAlert();
+    }
+  }
+
+  Future<bool> trySpeakDetection(
+      Detection detection, {
+        double? currentRisk,
+      }) async {
     if (!_voiceAlertsEnabled) return false;
-    // אם התראות כבויות → לא מדבר
+
+    if (_isSpeakingStuck()) {
+      _debug('speech stuck – resetting');
+      await _tts.stop();
+      _resetSpeakingState();
+    }
 
     if (_isSpeaking) {
       final newRisk = detection.riskScore;
 
-      if (kDebugMode) {
-        debugPrint('🔊 Speak attempt: ${detection.tag} '
-            '(risk: ${newRisk.toStringAsFixed(1)}), '
-            'currentRisk: ${currentRisk?.toStringAsFixed(1)}');
+      if (_pendingHighPriorityAlert == null ||
+          newRisk > _pendingHighPriorityAlert!.riskScore) {
+        _pendingHighPriorityAlert = detection;
+        _debug(
+          'queued: ${detection.tag} '
+              '(risk: ${newRisk.toStringAsFixed(1)})',
+        );
+      } else {
+        _debug(
+          'ignored lower priority: ${detection.tag} '
+              '(risk: ${newRisk.toStringAsFixed(1)})',
+        );
       }
 
-      // אם הסיכון לא גבוה משמעותית → לא קוטע
-      if (currentRisk != null && newRisk < currentRisk + 30) {
-
-        // שומר כהתראה ממתינה אם היא הכי מסוכנת
-        if (_pendingHighPriorityAlert == null ||
-            newRisk > _pendingHighPriorityAlert!.riskScore) {
-          _pendingHighPriorityAlert = detection;
-        }
-
-        return false;
-      }
-
-      // אם כן מסוכן → קוטע את הדיבור הנוכחי
-      await _tts.stop();
+      return false;
     }
 
+    final message = _buildMessage(detection);
+
     _isSpeaking = true;
+    _speakingStartTime = DateTime.now();
 
     try {
-      await _tts.speak(_buildMessage(detection));
-      // מדבר את ההודעה
-
-      if (kDebugMode) {
-        debugPrint('🔊 Speaking: ${detection.tag} '
-            '(risk: ${detection.riskScore.toStringAsFixed(1)})');
-      }
-
+      _debug(
+        'speaking: "$message" '
+            '(risk: ${detection.riskScore.toStringAsFixed(1)})',
+      );
+      await _tts.speak(message);
       return true;
     } catch (e) {
-      if (kDebugMode) debugPrint('TTS speak error: $e');
+      _debug('speak failed: $e');
       return false;
     } finally {
-      _isSpeaking = false;
-
-      // אם יש התראה ממתינה → מדבר אותה עכשיו
-      if (_pendingHighPriorityAlert != null) {
-        final pending = _pendingHighPriorityAlert!;
-        _pendingHighPriorityAlert = null;
-
-        await Future.delayed(const Duration(milliseconds: 200));
-        // המתנה קטנה בין דיבורים
-
-        await trySpeakDetection(pending, currentRisk: 0);
-      }
+      _resetSpeakingState();
+      _processPendingAlert();
     }
   }
 
-  // איפוס סטטוס דיבור
+  Future<void> stop() async {
+    await _tts.stop();
+    _resetSpeakingState();
+    _pendingHighPriorityAlert = null;
+    _debug('stopped');
+  }
+
   void resetSpeakingState() {
-    _isSpeaking = false;
+    _resetSpeakingState();
     _pendingHighPriorityAlert = null;
   }
 
-  // בונה את המשפט שמדברים
-  String _buildMessage(Detection detection) {
-    final localizedObject = _localizedLabel(detection.tag);
-    final severity = _severityText(detection.riskScore);
-    return '$localizedObject $severity';
+  bool _isSpeakingStuck() {
+    if (!_isSpeaking) return false;
+    if (_speakingStartTime == null) return true;
+
+    return DateTime.now().difference(_speakingStartTime!) >
+        _maxSpeakingDuration;
   }
 
-  // פונקציות ציבוריות לשימוש חיצוני
+  void _resetSpeakingState() {
+    _isSpeaking = false;
+    _speakingStartTime = null;
+  }
+
+  void _processPendingAlert() {
+    if (_pendingHighPriorityAlert == null) return;
+
+    final pending = _pendingHighPriorityAlert!;
+    _pendingHighPriorityAlert = null;
+
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (_voiceAlertsEnabled && !_isSpeaking) {
+        trySpeakDetection(pending);
+      }
+    });
+  }
+
+  Future<void> _safeSetLanguage(String language) async {
+    try {
+      final result = await _tts.setLanguage(language);
+      if (result != 1) {
+        _debug('language $language may not be fully supported');
+      }
+    } catch (e) {
+      _debug('language error – falling back to en-US: $e');
+      await _tts.setLanguage('en-US');
+    }
+  }
+
+  String _buildMessage(Detection detection) {
+    return '${_localizedLabel(detection.tag)} ${_severityText(detection.riskScore)}';
+  }
+
   String localizedLabel(String tag) => _localizedLabel(tag);
+
   String severityText(double riskScore) => _severityText(riskScore);
 
-  // תרגום שם האובייקט
   String _localizedLabel(String tag) {
-    if (_language.startsWith('he')) {
-      switch (tag) {
-      // רכבים
-        case 'car': return 'מכונית';
-        case 'bus': return 'אוטובוס';
-        case 'truck': return 'משאית';
-        case 'train': return 'רכבת';
-        case 'motorcycle': return 'אופנוע';
+    if (!_language.startsWith('he')) return tag;
 
-      // אנשים ותחבורה קלה
-        case 'person': return 'אדם';
-        case 'bicycle': return 'אופניים';
-        case 'skateboard': return 'סקייטבורד';
-
-      // תמרורים ותשתית
-        case 'traffic light': return 'רמזור';
-        case 'stop sign': return 'תמרור עצור';
-        case 'fire hydrant': return 'ברז כיבוי אש';
-
-      // בעלי חיים
-        case 'dog': return 'כלב';
-        case 'cat': return 'חתול';
-        case 'horse': return 'סוס';
-        case 'sheep': return 'כבשה';
-        case 'cow': return 'פרה';
-        case 'elephant': return 'פיל';
-        case 'bear': return 'דוב';
-        case 'zebra': return 'זברה';
-        case 'giraffe': return 'ג\'ירפה';
-        case 'bird': return 'ציפור';
-
-      // ריהוט
-        case 'bench': return 'ספסל';
-        case 'chair': return 'כיסא';
-        case 'couch': return 'ספה';
-        case 'bed': return 'מיטה';
-        case 'dining table': return 'שולחן אוכל';
-        case 'potted plant': return 'עציץ';
-
-      // אביזרים
-        case 'backpack': return 'תיק גב';
-        case 'handbag': return 'תיק יד';
-        case 'suitcase': return 'מזוודה';
-        case 'umbrella': return 'מטרייה';
-
-      // ציוד ספורט
-        case 'skis': return 'מגלשיים';
-        case 'sports ball': return 'כדור';
-        case 'surfboard': return 'גלשן';
-        case 'tennis racket': return 'מחבט טניס';
-
-        default: return tag;
-      }
-    }
-    return tag;
+    return switch (tag) {
+      'car' => 'מכונית',
+      'bus' => 'אוטובוס',
+      'truck' => 'משאית',
+      'train' => 'רכבת',
+      'motorcycle' => 'אופנוע',
+      'person' => 'אדם',
+      'bicycle' => 'אופניים',
+      'skateboard' => 'סקייטבורד',
+      'scooter' => 'קורקינט',
+      'crosswalk' => 'מעבר חציה',
+      'traffic light' => 'רמזור',
+      'stop sign' => 'תמרור עצור',
+      'fire hydrant' => 'ברז כיבוי אש',
+      'dog' => 'כלב',
+      'cat' => 'חתול',
+      'horse' => 'סוס',
+      'sheep' => 'כבשה',
+      'cow' => 'פרה',
+      'elephant' => 'פיל',
+      'bear' => 'דוב',
+      'zebra' => 'זברה',
+      'giraffe' => 'ג׳ירפה',
+      'bird' => 'ציפור',
+      'bench' => 'ספסל',
+      'chair' => 'כיסא',
+      'couch' => 'ספה',
+      'bed' => 'מיטה',
+      'dining table' => 'שולחן אוכל',
+      'potted plant' => 'עציץ',
+      'backpack' => 'תיק גב',
+      'handbag' => 'תיק יד',
+      'suitcase' => 'מזוודה',
+      'umbrella' => 'מטרייה',
+      'skis' => 'מגלשיים',
+      'sports ball' => 'כדור',
+      'surfboard' => 'גלשן',
+      'tennis racket' => 'מחבט טניס',
+      'vase' => 'אגרטל',
+      'bottle' => 'בקבוק',
+      'cup' => 'כוס',
+      'book' => 'ספר',
+      'cell phone' => 'טלפון',
+      'tv' => 'טלוויזיה',
+      'laptop' => 'מחשב נייד',
+      _ => tag,
+    };
   }
 
-  // תרגום רמת סיכון
   String _severityText(double riskScore) {
     if (_language.startsWith('he')) {
       if (riskScore >= 75) return 'קרוב מאוד';
@@ -263,8 +287,16 @@ class AlertService {
     return 'around';
   }
 
-  Future<void> stop() async {
-    await _tts.stop();
-    // עוצר דיבור
+  void _debug(String msg) {
+    if (!kDebugMode) return;
+
+    final t = DateTime.now()
+        .toIso8601String()
+        .split('T')
+        .last
+        .split('.')
+        .first;
+
+    debugPrint('[AlertService][$t] $msg');
   }
 }
