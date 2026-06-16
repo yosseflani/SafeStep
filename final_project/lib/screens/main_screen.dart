@@ -14,8 +14,7 @@ import '../services/camera_service.dart';
 import '../services/cooldown_manager.dart';
 import '../services/risk_scoring_service.dart';
 import '../services/yolo_service.dart';
-import '../services/voice_command_service.dart';
-import 'display_manager.dart';
+import '../services/vosk_command_service.dart';import 'display_manager.dart';
 import 'settings_screen.dart';
 
 class MainScreen extends StatefulWidget {
@@ -37,8 +36,7 @@ class _MainScreenState extends State<MainScreen> {
   final AlertService _alertService = AlertService();
   final FlutterTts _tts = FlutterTts();
   final DisplayManager _displayManager = DisplayManager();
-  final VoiceCommandService _voiceService = VoiceCommandService();
-
+  final VoskCommandService _voiceService = VoskCommandService();
   // ── מניעת עיבוד פריימים כפול ────────────────────────────
   bool _isProcessingFrame = false;
 
@@ -196,45 +194,31 @@ class _MainScreenState extends State<MainScreen> {
       if (!mounted) return;
     }
 
-    await _voiceService.startListening(
-      _handleVoiceCommand,
-        localeId: _isHebrew ? 'iw_IL' : 'en_US',      onError: () async {
-        if (!mounted) return;
-        await Future.delayed(const Duration(milliseconds: 500));
-        await _resumeListening();
-      },
-    );
+    await _voiceService.startListening(_handleVoiceCommand);
   }
 
   void _handleVoiceCommand(String command) {
     _debug('🎤 Voice command: "$command"');
+
     final text = command.toLowerCase().trim();
 
-    // ── פקודות בעברית ──────────────────────────────────────
-    final heStart = ['הפעל', 'התחל', 'תתחיל', 'תפעיל', 'תדליק', 'זיהוי', 'פתח', 'הדלק', 'אפעיל'];
-    final heStop  = ['עצור', 'הפסק', 'כבה', 'תעצור', 'תפסיק', 'תכבה', 'סגור', 'סיים', 'די', 'מספיק'];
-    final heSettings = ['הגדרות', 'פתח הגדרות', 'להגדרות', 'מסך הגדרות'];
-    final heVibOn  = ['הפעל רטט', 'תפעיל רטט', 'רטט פעיל', 'הדלק רטט'];
-    final heVibOff = ['כבה רטט', 'תכבה רטט', 'רטט כבוי', 'בלי רטט', 'ללא רטט'];
-
-    // ── פקודות באנגלית ──────────────────────────────────────
-    final enStart = ['start', 'begin', 'activate', 'turn on', 'run', 'go', 'detect', 'open'];
-    final enStop  = ['stop', 'pause', 'turn off', 'disable', 'end', 'quit', 'halt', 'cancel'];
-    final enSettings = ['settings', 'open settings', 'show settings', 'go to settings', 'preferences'];
-    final enVibOn  = ['turn on vibration', 'enable vibration', 'vibration on', 'activate vibration'];
-    final enVibOff = ['turn off vibration', 'disable vibration', 'vibration off', 'no vibration'];
-
-    bool has(List<String> phrases) => phrases.any((p) => text.contains(p));
-
-    if (has([...heStart, ...enStart])) {
+    if (text == 'start') {
       if (!_isRunning) _startDetection();
-    } else if (has([...heStop, ...enStop])) {
+    } else if (text == 'stop') {
       if (_isRunning) _stopDetection();
-    } else if (has([...heSettings, ...enSettings])) {
+    } else if (text == 'settings') {
       _openSettings();
-    } else if (has([...heVibOn, ...enVibOn])) {
+    } else if (text == 'help') {
+      _alertService.speakVoiceTest();
+    } else if (text == 'repeat') {
+      if (_currentMostDangerous != null) {
+        _alertService.trySpeakDetection(_currentMostDangerous!);
+      } else {
+        _tts.speak(_isHebrew ? 'אין אובייקט מסוכן כרגע' : 'No dangerous object detected');
+      }
+    } else if (text == 'vibration on') {
       setState(() => _vibrationEnabled = true);
-    } else if (has([...heVibOff, ...enVibOff])) {
+    } else if (text == 'vibration off') {
       setState(() => _vibrationEnabled = false);
     }
   }
