@@ -1,0 +1,7 @@
+crosswalk
+person
+car
+motorcycle
+pole
+couch
+bench

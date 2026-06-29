@@ -14,7 +14,8 @@ import '../services/camera_service.dart';
 import '../services/cooldown_manager.dart';
 import '../services/risk_scoring_service.dart';
 import '../services/yolo_service.dart';
-import '../services/vosk_command_service.dart';import 'display_manager.dart';
+import '../services/vosk_command_service.dart';
+import 'display_manager.dart';
 import 'settings_screen.dart';
 
 class MainScreen extends StatefulWidget {
@@ -339,16 +340,50 @@ class _MainScreenState extends State<MainScreen> {
       if (!(await Vibration.hasVibrator() ?? false)) return;
 
       final duration = switch (tag) {
-        'car' || 'bus' || 'truck' || 'train' || 'motorcycle'               => 400,
-        'person' || 'bicycle' || 'scooter' || 'skateboard'                 => 250,
-        'traffic light' || 'stop sign' || 'fire hydrant' || 'crosswalk'   => 150,
-        'dog' || 'cat' || 'horse' || 'sheep' || 'cow' ||
-        'elephant' || 'bear' || 'zebra' || 'giraffe' || 'bird'            => 200,
-        'bench' || 'chair' || 'couch' || 'bed' ||
-        'dining table' || 'potted plant'                                   => 300,
-        'backpack' || 'handbag' || 'suitcase' || 'umbrella'               => 180,
-        'skis' || 'sports ball' || 'surfboard' || 'tennis racket'         => 120,
-        _                                                                   => 100,
+
+      // ─────────────────────────────────────────────
+      // SafeStep custom model objects
+      // ─────────────────────────────────────────────
+
+      // סכנה גבוהה מאוד
+        'car' || 'motorcycle' => 400,
+
+      // מכשול דינמי
+        'person' => 250,
+
+      // מכשול סטטי משמעותי
+        'pole' => 350,
+
+      // מכשולים סטטיים
+        'bench' || 'couch' => 300,
+
+      // אובייקט ניווט
+        'crosswalk' => 150,
+
+      /*
+  // ─────────────────────────────────────────────
+  // Old COCO categories - saved for future use
+  // ─────────────────────────────────────────────
+
+  'car' || 'bus' || 'truck' || 'train' || 'motorcycle' => 400,
+
+  'person' || 'bicycle' || 'scooter' || 'skateboard' => 250,
+
+  'traffic light' || 'stop sign' || 'fire hydrant' || 'crosswalk' => 150,
+
+  'dog' || 'cat' || 'horse' || 'sheep' || 'cow' ||
+  'elephant' || 'bear' || 'zebra' || 'giraffe' || 'bird' => 200,
+
+  'bench' || 'chair' || 'couch' || 'bed' ||
+  'dining table' || 'potted plant' => 300,
+
+  'backpack' || 'handbag' || 'suitcase' || 'umbrella' => 180,
+
+  'skis' || 'sports ball' || 'surfboard' ||
+  'tennis racket' => 120,
+  */
+
+        _ => 100,
       };
 
       await Vibration.vibrate(duration: duration);

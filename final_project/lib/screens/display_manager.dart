@@ -1,61 +1,73 @@
+/// מנהל את לוגיקת עדכון התצוגה של אובייקטים מזוהים.
+/// המחלקה אחראית על החלטה מתי להחליף אובייקט מוצג באובייקט חדש
+/// המטרה: למנוע "הבהוב" בתצוגה (החלפות מהירות מדי) אך לאפשר עדכון חירום במקרה סכנה
 class DisplayManager {
-  // מחלקה שמחליטה מתי לעדכן את התצוגה (UI)
 
-  DateTime? currentDisplayStartTime;
-  // הזמן שבו התחילה התצוגה הנוכחית (יכול להיות null אם אין תצוגה)
+  /// זמן תחילת התצוגה של האובייקט הנוכחי.
+  DateTime? currentDisplayStartTime; // nullable - null אם אין אובייקט מוצג כרגע
 
-  static const minDisplayDuration = Duration(seconds: 3);
-  // זמן מינימלי להצגת אובייקט לפני שמחליפים אותו
+  /// משך זמן מינימלי להצגת אובייקט לפני החלפתו.
+  static const minDisplayDuration = Duration(seconds: 2); // קבוע - מינימום 2 שניות תצוגה
+  // המטרה: למנוע הבהוב - אם כל פריים מציג אובייקט אחר, המשתמש לא יצליח לקרוא
 
-  static const emergencyRiskThreshold = 30.0;
-  // סף חירום: אם הסיכון קופץ מעל ערך זה → מעדכנים מיד
+  /// סף שינוי סיכון המחייב עדכון מיידי.
+  static const emergencyRiskThreshold = 15.0; // קבוע - אם הסיכון עלה ב-15 נקודות ומעלה
+  // זה מצב חירום - האובייקט החדש מסוכן משמעותית יותר, חובה להציג אותו מיד
 
-  bool shouldUpdateDisplay({
-    required bool hasCurrentObject,
-    // האם כבר מוצג אובייקט כרגע
-
-    required double? newRisk,
-    // רמת סיכון של האובייקט החדש
-
-    required double? currentRisk,
-    // רמת סיכון של האובייקט הנוכחי
+  /// קובע האם יש לעדכן את האובייקט המוצג.
+  /// הפונקציה מחזירה true אם צריך להחליף את האובייקט המוצג באובייקט החדש
+  bool shouldUpdateDisplay({ // פונקציה שמקבלת 3 פרמטרים חובה (named parameters)
+    required bool hasCurrentObject, // האם יש אובייקט שמוצג כרגע על המסך
+    required double? newRisk, // ציון הסיכון של האובייקט החדש (nullable - יכול להיות null)
+    required double? currentRisk, // ציון הסיכון של האובייקט שמוצג כרגע (nullable)
   }) {
-    if (!hasCurrentObject) {
-      return true;
-      // אם אין אובייקט מוצג → כן לעדכן
+
+    // אין אובייקט מוצג כעת.
+    if (!hasCurrentObject) { // אם אין אובייקט על המסך
+      return true; // תמיד כדאי להציג אובייקט חדש כשאין כלום
     }
 
-    if (currentDisplayStartTime == null) {
-      return true;
-      // אם לא ידוע מתי התחילה התצוגה → כן לעדכן
+    // זמן תחילת התצוגה אינו ידוע.
+    if (currentDisplayStartTime == null) { // אם אין זמן התחלה (מצב לא תקין)
+      return true; // נעדכן כדי לתקן את המצב
     }
 
-    final timeSinceDisplayStart =
-    DateTime.now().difference(currentDisplayStartTime!);
-    // מחשב כמה זמן עבר מאז שהתחלנו להציג את האובייקט
+    // משך הזמן שהאובייקט הנוכחי מוצג.
+    final timeSinceDisplayStart = // חישוב כמה זמן האובייקט הנוכחי על המסך
+    DateTime.now().difference(currentDisplayStartTime!); // ! = force unwrap - בטוחים שאינו null כי בדקנו למעלה
+    // difference() מחזיר Duration - הפרש הזמנים בין עכשיו לזמן ההתחלה
 
-    final riskDifference = (newRisk ?? 0) - (currentRisk ?? 0);
-    // מחשב כמה הסיכון השתנה (אם null → מתייחס כ-0)
+    // שינוי ברמת הסיכון בין האובייקט החדש לנוכחי.
+    final riskDifference = (newRisk ?? 0) - (currentRisk ?? 0); // חישוב הפרש סיכון
+    // ?? 0 = אם הערך null, נשתמש ב-0 במקום (מונע שגיאה)
+    // לדוגמה: אם newRisk=80 ו-currentRisk=50, אז riskDifference=30 (עלייה חדה)
 
-    if (timeSinceDisplayStart >= minDisplayDuration) {
-      return true;
-      // אם עבר מספיק זמן → מותר לעדכן
-    } else if (riskDifference >= emergencyRiskThreshold) {
-      return true;
-      // אם יש קפיצה גדולה בסיכון → לעדכן מיד (חירום)
+    // עבר זמן התצוגה המינימלי.
+    if (timeSinceDisplayStart >= minDisplayDuration) { // אם עברו 2 שניות או יותר
+      return true; // מותר להחליף - האובייקט הוצג מספיק זמן
     }
 
-    return false;
-    // אחרת → לא לעדכן (כדי למנוע ריצוד)
+    // זוהתה עלייה חריגה ברמת הסיכון.
+    if (riskDifference >= emergencyRiskThreshold) { // אם הסיכון עלה ב-15 נקודות או יותר
+      return true; // עדכון חירום - האובייקט החדש מסוכן משמעותית
+      // לדוגמה: אם האובייקט הנוכחי הוא "ספסל" (סיכון נמוך) והחדש הוא "מכונית מתקרבת" (סיכון גבוה)
+    }
+
+    // ממשיכים להציג את האובייקט הנוכחי.
+    return false; // לא לעדכן - האובייקט הנוכחי עדיין רלוונטי
+    // זה קורה אם: עברו פחות מ-2 שניות וגם אין עלייה חדה בסיכון
   }
 
-  void markDisplayStart() {
-    currentDisplayStartTime = DateTime.now();
-    // שומר את הזמן שבו התחילה התצוגה
+  /// מסמן את תחילת הצגת האובייקט הנוכחי.
+  /// קוראים לפונקציה הזו כשמציגים אובייקט חדש על המסך
+  void markDisplayStart() { // פונקציה פשוטה שמעדכנת את זמן ההתחלה
+    currentDisplayStartTime = DateTime.now(); // שומרת את הזמן הנוכחי
+    // זה ישמש לחישוב כמה זמן האובייקט מוצג (ב-shouldUpdateDisplay)
   }
 
-  void clearDisplayStart() {
-    currentDisplayStartTime = null;
-    // מאפס את זמן התצוגה (כאילו אין תצוגה פעילה)
+  /// מאפס את נתוני התצוגה הפעילה.
+  /// קוראים לפונקציה הזו כשמפסיקים להציג אובייקט (למשל כשהמערכת נעצרת)
+  void clearDisplayStart() { // פונקציה שמנקה את זמן ההתחלה
+    currentDisplayStartTime = null; // מאפסת ל-null - אין אובייקט מוצג
   }
 }

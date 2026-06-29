@@ -69,10 +69,11 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/yolov8n_float32.tflite
-    - assets/labels.txt
+    #- assets/yolov8n_float32.tflite
+    #- assets/labels.txt
     - assets/models/vosk-model-small-en-us-0.15.zip
-
+    - assets/safestep_yolo.tflite
+    - assets/safestep_labels.txt
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

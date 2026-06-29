@@ -1,83 +1,65 @@
-import 'package:flutter/material.dart';
-// ייבוא ספריית UI של Flutter
+import 'package:flutter/material.dart'; // ייבוא ספריית Material של Flutter - כוללת את כל רכיבי ה-UI הבסיסיים
 
-import 'package:flutter_localizations/flutter_localizations.dart';
-// ייבוא תמיכה בשפות שונות (כולל RTL)
+import 'package:flutter_localizations/flutter_localizations.dart'; // ייבוא ספריית לוקליזציה - תמיכה בריבוי שפות וכיווניות
 
-import 'screens/main_screen.dart';
-// ייבוא המסך הראשי של האפליקציה
+import 'screens/main_screen.dart'; // ייבוא המסך הראשי של האפליקציה
 
-void main() async {
-  // פונקציית התחלה של האפליקציה
+/// נקודת הכניסה של האפליקציה
+/// הפונקציה הראשונה שרצה כשהאפליקציה מופעלת
+void main() async { // async - הפונקציה יכולה להכיל פעולות אסינכרוניות (ממתינות)
 
-  WidgetsFlutterBinding.ensureInitialized();
-  // מאתחל את Flutter (חובה לפני פעולות async או plugins)
+  WidgetsFlutterBinding.ensureInitialized(); // אתחול Flutter לפני שימוש בשירותים - חובה לפני MethodChannel, SharedPreferences וכו'
 
-  runApp(const SafeStep());
-  // מפעיל את האפליקציה עם ה-Widget הראשי SafeStep
+  runApp(const SafeStep()); // מפעיל את האפליקציה עם ה-widget הראשי SafeStep
 }
 
+/// מחלקת האפליקציה הראשית
+/// StatelessWidget - widget שלא משתנה בזמן ריצה (ללא state דינמי)
 class SafeStep extends StatelessWidget {
-  // מחלקת האפליקציה הראשית (ללא state)
-
-  const SafeStep({super.key});
-  // constructor
+  const SafeStep({super.key}); // קונסטרקטור עם key לניהול זיהוי ה-widget בעץ
 
   @override
-  Widget build(BuildContext context) {
-    // בונה את האפליקציה
+  Widget build(BuildContext context) { // הפונקציה שבונה את ה-UI של האפליקציה
+    // context - מספק מידע על מיקום ה-widget בעץ
 
-    return MaterialApp(
-      // ה-Widget הראשי שמגדיר את כל האפליקציה
+    return MaterialApp( // MaterialApp הוא ה-widget הראשי - מספק ניווט, עיצוב, לוקליזציה וכו'
 
-      debugShowCheckedModeBanner: false,
-      // מסתיר את ה-DEBUG banner
+      debugShowCheckedModeBanner: false, // מסיר את הסרט "DEBUG" בפינה העליונה ימנית
 
-      title: 'Safe Step',
-      // שם האפליקציה
+      title: 'Safe Step', // שם האפליקציה שמופיע ב-Recent Apps ובמנהל המשימות
 
-      // תמיכה רב-לשונית - עברית ואנגלית כולל כיוון RTL
-      locale: const Locale('he', 'IL'),
-      // שפה ברירת מחדל: עברית
+      locale: const Locale('he', 'IL'), // מגדיר את השפה הנוכחית לעברית (ישראל)
+      // Locale מקבל קוד שפה (he) וקוד מדינה (IL)
 
-      supportedLocales: const [
-        Locale('he', 'IL'),
-        Locale('en', 'US'),
+      supportedLocales: const [ // רשימה של כל השפות שהאפליקציה תומכת בהן
+        Locale('he', 'IL'), // עברית (ישראל)
+        Locale('en', 'US'), // אנגלית (ארה"ב)
       ],
-      // שפות נתמכות
 
-      localizationsDelegates: const [
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
+      localizationsDelegates: const [ // delegates - מחלקות שמספקות תרגומים ועיצובים לפי שפה
+        GlobalMaterialLocalizations.delegate, // תרגומים לרכיבי Material Design (כפתורים, טקסטים וכו')
+        GlobalWidgetsLocalizations.delegate, // תרגומים ל-widgets בסיסיים של Flutter
+        GlobalCupertinoLocalizations.delegate, // תרגומים לרכיבי iOS (Cupertino)
       ],
-      // מאפשר ל-Flutter לתמוך בתרגום ורכיבים לפי שפה
 
-      // ערכת נושא כהה עקבית עם שאר האפליקציה
-      themeMode: ThemeMode.dark,
-      // תמיד מצב כהה
+      themeMode: ThemeMode.dark, // מגדיר שהאפליקציה תמיד תהיה במצב כהה (לא משתנה לפי הגדרות המכשיר)
 
-      theme: ThemeData(
-        useMaterial3: true,
-        // שימוש בעיצוב Material 3
+      theme: ThemeData( // ThemeData - מגדיר את כל ערכת הנושא של האפליקציה
 
-        brightness: Brightness.dark,
-        // מצב כהה
+        useMaterial3: true, // מפעיל את הגרסה העדכנית של Material Design (עיצוב מודרני)
 
-        scaffoldBackgroundColor: const Color(0xFF0F1115),
-        // צבע רקע כללי
+        brightness: Brightness.dark, // מגדיר שהעיצוב יהיה כהה (רקע כהה, טקסט בהיר)
 
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFF7A00),
-          // צבע ראשי (כתום)
+        scaffoldBackgroundColor: const Color(0xFF0F1115), // צבע הרקע של Scaffold
+        // 0xFF = שקיפות מלאה, 0F1115 = צבע כהה כחלחל
 
-          brightness: Brightness.dark,
-          // מתאים למצב כהה
+        colorScheme: ColorScheme.fromSeed( // יוצר סכמת צבעים אוטומטית מצבע בסיס (seed)
+          seedColor: const Color(0xFFFF7A00), // צבע בסיס: כתום - Flutter ייצור אוטומטית גוונים שונים
+          brightness: Brightness.dark, // מתאים את סכמת הצבעים למצב כהה
         ),
       ),
 
-      home: const MainScreen(),
-      // המסך הראשון שמוצג למשתמש
+      home: const MainScreen(), // המסך הראשון שמופיע כשהאפליקציה נפתחת
     );
   }
 }

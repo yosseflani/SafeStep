@@ -1,101 +1,96 @@
 import 'package:flutter/foundation.dart';
-// ייבוא כלים בסיסיים כמו @immutable ו-listEquals
+// ייבוא ספריית foundation של Flutter - כולל כלים כמו @immutable ו-listEquals
 
+/// מייצג אובייקט שזוהה בתמונה ע"י מערכת זיהוי המכשולים.
+/// @immutable - המחלקה בלתי-ניתנת לשינוי לאחר יצירתה (כל השדות final)
 @immutable
 class Detection {
-  // מחלקה שמייצגת אובייקט שזוהה (Immutable = לא משתנה אחרי יצירה)
+  /// סוג האובייקט שזוהה (למשל: אדם, רכב, אופניים).
+  final String tag; // שדה קבוע - מוגדר פעם אחת בקונסטרקטור ולא משתנה
 
-  final String tag;
-  // שם האובייקט (למשל: car, person)
+  /// רמת הביטחון של המודל בזיהוי (0.0 - 1.0).
+  final double confidence; // ערך בין 0 ל-1, ככל שגבוה יותר - המודל יותר בטוח בזיהוי
 
-  final double confidence;
-  // רמת ביטחון של המודל (בין 0 ל-1)
+  /// גבולות האובייקט בתמונה:
+  /// [left, top, right, bottom]
+  final List<double> box; // רשימה של 4 ערכים: left, top, right, bottom שמגדירים תיבה סביב האובייקט
 
-  final List<double> box;
-  // מיקום האובייקט: [left, top, right, bottom]
+  /// ציון הסיכון המחושב עבור האובייקט.
+  final double riskScore; // ערך שמייצג כמה מסוכן האובייקט (למשל, רכב מתקרב = סיכון גבוה)
 
-  final double riskScore;
-  // ציון סיכון (מחושב בנפרד)
+  /// מציין האם האובייקט נמצא בהתקרבות למשתמש.
+  final bool isApproaching; // true = האובייקט מתקרב, false = מתרחק או עומד
 
-  final bool isApproaching;
-  // האם האובייקט מתקרב למשתמש
-
+  // קונסטרקטור של המחלקה - יוצר אובייקט Detection חדש עם named parameters
   Detection({
-    required this.tag,
-    required this.confidence,
-    required List<double> box,
-    this.riskScore = 0.0,
-    // אם לא נשלח ערך → ברירת מחדל 0
-    this.isApproaching = false,
-    // אם לא נשלח ערך → ברירת מחדל false
-  })  : assert(box.length == 4, 'Box must have exactly 4 values: [left, top, right, bottom]'),
-  // בודק שהרשימה באורך 4
-        box = List.unmodifiable(box);
-  // הופך את הרשימה ללא ניתנת לשינוי (Immutable)
+    required this.tag, // חובה לשלוח סוג אובייקט
+    required this.confidence, // חובה לשלוח רמת ביטחון
+    required List<double> box, // חובה לשלוח רשימת גבולות (מעובד לפני שמירה)
+    this.riskScore = 0.0, // אופציונלי - ברירת מחדל 0.0 (אין סיכון)
+    this.isApproaching = false, // אופציונלי - ברירת מחדל false (לא מתקרב)
+  })  : assert(
+  // בדיקת תקינות בזמן פיתוח (לא רץ ב-production)
+  box.length == 4, // התנאי: אורך הרשימה חייב להיות 4
+  'Box must contain [left, top, right, bottom]', // הודעת שגיאה אם התנאי נכשל
+  ),
+        box = List.unmodifiable(box); // יוצר עותק בלתי-ניתן לשינוי של הרשימה - שומר על immutability
 
-  // יוצר עותק של האובייקט עם שינויים
+  /// יוצר עותק של האובייקט עם אפשרות לעדכון שדות נבחרים.
+  /// פונקציית copyWith היא דפוס נפוץ ב-Flutter - מאפשרת ליצור עותק חדש עם שינויים קלים
   Detection copyWith({
-    String? tag,
-    double? confidence,
-    List<double>? box,
-    double? riskScore,
-    bool? isApproaching,
+    // כל הפרמטרים אופציונליים (nullable)
+    String? tag, // אם null - יישאר כמו המקור
+    double? confidence, // אם null - יישאר כמו המקור
+    List<double>? box, // אם null - יישאר כמו המקור
+    double? riskScore, // אם null - יישאר כמו המקור
+    bool? isApproaching, // אם null - יישאר כמו המקור
   }) {
     return Detection(
-      tag: tag ?? this.tag,
-      // אם לא נשלח tag → נשאר הישן
-
-      confidence: confidence ?? this.confidence,
-      // אותו דבר ל-confidence
-
-      box: box ?? this.box,
-      // אם לא נשלח box → נשאר אותו דבר
-
-      riskScore: riskScore ?? this.riskScore,
-      // עדכון riskScore אם רוצים
-
-      isApproaching: isApproaching ?? this.isApproaching,
-      // עדכון מצב התקרבות אם רוצים
+      // יוצר אובייקט Detection חדש
+      tag: tag ?? this.tag, // ?? הוא null-aware operator: מחזיר את הערך הראשון שאינו null
+      confidence: confidence ?? this.confidence, // אם נשלח ערך חדש - משתמש בו, אחרת - משתמש בערך הנוכחי
+      box: box ?? this.box, // אותו היגיון
+      riskScore: riskScore ?? this.riskScore, // אותו היגיון
+      isApproaching: isApproaching ?? this.isApproaching, // אותו היגיון
     );
   }
 
-  // חישובים גיאומטריים מה-box
+  /// רוחב תיבת הזיהוי.
+  double get width => (box[2] - box[0]).abs(); // getter - מחשב רוחב: right - left, עם abs() לערך חיובי
 
-  double get width => (box[2] - box[0]).abs();
-  // רוחב = right - left
+  /// גובה תיבת הזיהוי.
+  double get height => (box[3] - box[1]).abs(); // מחשב גובה: bottom - top
 
-  double get height => (box[3] - box[1]).abs();
-  // גובה = bottom - top
+  /// מיקום מרכז האובייקט בציר האופקי (X).
+  double get centerX => (box[0] + box[2]) / 2; // ממוצע של שמאל וימין = מרכז אופקי
 
-  double get centerX => (box[0] + box[2]) / 2;
-  // מרכז X
+  /// מיקום מרכז האובייקט בציר האנכי (Y).
+  double get centerY => (box[1] + box[3]) / 2; // ממוצע של למעלה ולמטה = מרכז אנכי
 
-  double get centerY => (box[1] + box[3]) / 2;
-  // מרכז Y
+  /// שטח תיבת הזיהוי.
+  double get area => width * height; // משתמש ב-getters שהגדרנו קודם (width ו-height)
 
-  double get area => width * height;
-  // שטח האובייקט
-
-  // השוואה בין שני אובייקטים
+  /// השוואה בין שני אובייקטים לפי תוכנם.
+  /// דורס את אופרטור == (שוויון) - מאפשר להשוות שני אובייקטי Detection עם ==
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-          // אם זה אותו אובייקט בזיכרון
-          other is Detection &&
-              // בודק שזה אותו סוג
-              tag == other.tag &&
-              confidence == other.confidence &&
-              riskScore == other.riskScore &&
-              isApproaching == other.isApproaching &&
-              listEquals(box, other.box);
-  // משווה גם את הרשימה (List)
+      // מקבל אובייקט כלשהו ומחזיר true/false
+  identical(this, other) || // בדיקה מהירה: האם זה אותו אובייקט בזיכרון?
+      other is Detection && // בדיקה שהאובייקט השני הוא גם מסוג Detection
+          tag == other.tag && // משווה את סוג האובייקט
+          confidence == other.confidence && // משווה את רמת הביטחון
+          riskScore == other.riskScore && // משווה את ציון הסיכון
+          isApproaching == other.isApproaching && // משווה את מצב ההתקרבות
+          listEquals(box, other.box); // פונקציה מ-Flutter foundation להשוואת רשימות
 
+  /// יצירת Hash Code עבור השוואות ואוספים.
+  /// דורס את hashCode - חובה כשדורסים == - משמש לאוספים כמו Set ו-Map
   @override
   int get hashCode =>
-      tag.hashCode ^
-      confidence.hashCode ^
-      riskScore.hashCode ^
-      isApproaching.hashCode ^
-      Object.hashAll(box);
-// יוצר מזהה ייחודי לאובייקט
+      // מחזיר מספר שמייצג את האובייקט (hash)
+  tag.hashCode ^ // XOR של hash של tag
+  confidence.hashCode ^ // XOR של hash של confidence
+  riskScore.hashCode ^ // XOR של hash של riskScore
+  isApproaching.hashCode ^ // XOR של hash של isApproaching
+  Object.hashAll(box); // פונקציה שיוצרת hash מרשימה שלמה, XOR (^) מערבב hash codes
 }
