@@ -1,65 +1,63 @@
-import 'package:flutter/material.dart'; // ייבוא ספריית Material של Flutter - כוללת את כל רכיבי ה-UI הבסיסיים
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
-import 'package:flutter_localizations/flutter_localizations.dart'; // ייבוא ספריית לוקליזציה - תמיכה בריבוי שפות וכיווניות
+import 'screens/main_screen.dart';
 
-import 'screens/main_screen.dart'; // ייבוא המסך הראשי של האפליקציה
+/// נקודת הכניסה של האפליקציה.
+void main() async {
+  // אתחול Flutter לפני שימוש בשירותי המערכת.
+  WidgetsFlutterBinding.ensureInitialized();
 
-/// נקודת הכניסה של האפליקציה
-/// הפונקציה הראשונה שרצה כשהאפליקציה מופעלת
-void main() async { // async - הפונקציה יכולה להכיל פעולות אסינכרוניות (ממתינות)
-
-  WidgetsFlutterBinding.ensureInitialized(); // אתחול Flutter לפני שימוש בשירותים - חובה לפני MethodChannel, SharedPreferences וכו'
-
-  runApp(const SafeStep()); // מפעיל את האפליקציה עם ה-widget הראשי SafeStep
+  runApp(const SafeStep());
 }
 
-/// מחלקת האפליקציה הראשית
-/// StatelessWidget - widget שלא משתנה בזמן ריצה (ללא state דינמי)
+/// ה־Widget הראשי של האפליקציה.
 class SafeStep extends StatelessWidget {
-  const SafeStep({super.key}); // קונסטרקטור עם key לניהול זיהוי ה-widget בעץ
+  const SafeStep({super.key});
 
   @override
-  Widget build(BuildContext context) { // הפונקציה שבונה את ה-UI של האפליקציה
-    // context - מספק מידע על מיקום ה-widget בעץ
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      // הסתרת חיווי DEBUG.
+      debugShowCheckedModeBanner: false,
 
-    return MaterialApp( // MaterialApp הוא ה-widget הראשי - מספק ניווט, עיצוב, לוקליזציה וכו'
+      title: 'Safe Step',
 
-      debugShowCheckedModeBanner: false, // מסיר את הסרט "DEBUG" בפינה העליונה ימנית
+      // שפת ברירת המחדל של האפליקציה.
+      locale: const Locale('he', 'IL'),
 
-      title: 'Safe Step', // שם האפליקציה שמופיע ב-Recent Apps ובמנהל המשימות
-
-      locale: const Locale('he', 'IL'), // מגדיר את השפה הנוכחית לעברית (ישראל)
-      // Locale מקבל קוד שפה (he) וקוד מדינה (IL)
-
-      supportedLocales: const [ // רשימה של כל השפות שהאפליקציה תומכת בהן
-        Locale('he', 'IL'), // עברית (ישראל)
-        Locale('en', 'US'), // אנגלית (ארה"ב)
+      // השפות הנתמכות.
+      supportedLocales: const [
+        Locale('he', 'IL'),
+        Locale('en', 'US'),
       ],
 
-      localizationsDelegates: const [ // delegates - מחלקות שמספקות תרגומים ועיצובים לפי שפה
-        GlobalMaterialLocalizations.delegate, // תרגומים לרכיבי Material Design (כפתורים, טקסטים וכו')
-        GlobalWidgetsLocalizations.delegate, // תרגומים ל-widgets בסיסיים של Flutter
-        GlobalCupertinoLocalizations.delegate, // תרגומים לרכיבי iOS (Cupertino)
+      // תמיכה בלוקליזציה של Flutter.
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
       ],
 
-      themeMode: ThemeMode.dark, // מגדיר שהאפליקציה תמיד תהיה במצב כהה (לא משתנה לפי הגדרות המכשיר)
+      // שימוש קבוע בערכת נושא כהה.
+      themeMode: ThemeMode.dark,
 
-      theme: ThemeData( // ThemeData - מגדיר את כל ערכת הנושא של האפליקציה
+      theme: ThemeData(
+        useMaterial3: true,
 
-        useMaterial3: true, // מפעיל את הגרסה העדכנית של Material Design (עיצוב מודרני)
+        brightness: Brightness.dark,
 
-        brightness: Brightness.dark, // מגדיר שהעיצוב יהיה כהה (רקע כהה, טקסט בהיר)
+        scaffoldBackgroundColor: const Color(0xFF0F1115),
 
-        scaffoldBackgroundColor: const Color(0xFF0F1115), // צבע הרקע של Scaffold
-        // 0xFF = שקיפות מלאה, 0F1115 = צבע כהה כחלחל
-
-        colorScheme: ColorScheme.fromSeed( // יוצר סכמת צבעים אוטומטית מצבע בסיס (seed)
-          seedColor: const Color(0xFFFF7A00), // צבע בסיס: כתום - Flutter ייצור אוטומטית גוונים שונים
-          brightness: Brightness.dark, // מתאים את סכמת הצבעים למצב כהה
+        // יצירת סכמת צבעים המבוססת על צבע ראשי.
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFFF7A00),
+          brightness: Brightness.dark,
         ),
       ),
 
-      home: const MainScreen(), // המסך הראשון שמופיע כשהאפליקציה נפתחת
+      // מסך הפתיחה של האפליקציה.
+      home: const MainScreen(),
     );
   }
 }

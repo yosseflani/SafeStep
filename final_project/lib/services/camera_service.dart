@@ -1,213 +1,192 @@
-import 'package:camera/camera.dart'; // ייבוא ספריית camera של Flutter - מספקת CameraController, CameraImage וכו'
+import 'package:camera/camera.dart';
 
-import 'package:flutter/foundation.dart'; // ייבוא ספריית foundation - כולל kDebugMode, debugPrint
+import 'package:flutter/foundation.dart';
 
-import 'package:permission_handler/permission_handler.dart'; // ייבוא ספריית permission_handler - ניהול הרשאות באפליקציה
+import 'package:permission_handler/permission_handler.dart';
 
-/// שירות האחראי על ניהול המצלמה והזרמת פריימים למערכת זיהוי המכשולים.
-/// מחלקה שמנהלת את כל הלוגיקה של המצלמה: אתחול, הזרמת פריימים, וניטור ביצועים
+/// שירות לניהול המצלמה והזרמת פריימים לזיהוי.
 class CameraService {
 
-  /// בקר המצלמה הראשי.
-  CameraController? _controller; // בקר המצלמה - nullable כי מתחיל כ-null עד שהמצלמה מאותחלת
-  // ? = nullable type - יכול להיות null או CameraController
+  // בקר המצלמה הפעיל.
+  CameraController? _controller;
 
-  /// מצב המצלמה ומצב עיבוד הפריימים.
-  bool _isInitialized = false; // דגל שמציין אם המצלמה אותחלה בהצלחה
-  bool _isProcessing = false; // דגל שמציין אם כרגע מעבדים פריים (מונע עיבוד מקבילי)
+  bool _isInitialized = false;
+  bool _isProcessing = false;
 
-  /// נתוני ניטור ביצועים.
-  int _frameCounter = 0; // מונה סך כל הפריימים שהתקבלו מהמצלמה
-  int _skippedFrames = 0; // מונה הפריימים שדילגנו עליהם (כי עדיין מעבדים פריים קודם)
+  // נתוני ניטור ביצועים.
+  int _frameCounter = 0;
+  int _skippedFrames = 0;
 
-  /// תדירות דיווח במצב פיתוח.
-  static const _debugFrameInterval = 15; // כל 15 פריימים מדפיסים סטטיסטיקות ב-debug
+  // תדירות דיווח במצב Debug.
+  static const _debugFrameInterval = 15;
 
-  /// גישה לבקר המצלמה לצורך תצוגה במסכים.
-  CameraController? get controller => _controller; // getter - מאפשר לקרוא את _controller מחוץ למחלקה
-  // => = arrow function - קיצור לפונקציה שמחזירה ערך
+  CameraController? get controller => _controller;
 
-  /// מציין האם המצלמה מוכנה לשימוש.
-  bool get isInitialized => _isInitialized; // getter - מחזיר את מצב האתחול
+  bool get isInitialized => _isInitialized;
 
-  /// מציין האם הזרמת פריימים פעילה.
-  bool get isStreaming => // getter - בודק אם המצלמה מזרימה פריימים כרגע
-  _controller?.value.isStreamingImages == true; // ?. = null-aware operator - אם _controller null, כל הביטוי null
-  // .value = מידע על מצב המצלמה
-  // .isStreamingImages = האם המצלמה מזרימה פריימים
-  // == true = בדיקה שהערך הוא true (לא null)
+  bool get isStreaming =>
+      _controller?.value.isStreamingImages == true;
 
-  /// מחזיר נתוני ביצועים בסיסיים.
-  Map<String, int> getStats() => { // getter שמחזיר Map עם סטטיסטיקות
-    'total': _frameCounter, // סך כל הפריימים
-    'skipped': _skippedFrames, // פריימים שדילגנו עליהם
-    'processed': _frameCounter - _skippedFrames, // פריימים שעובדו בפועל
+  /// מחזיר סטטיסטיקת עיבוד פריימים.
+  Map<String, int> getStats() => {
+    'total': _frameCounter,
+    'skipped': _skippedFrames,
+    'processed': _frameCounter - _skippedFrames,
   };
 
   /// בודק האם שיעור הדילוג על פריימים תקין.
-  bool isStreamHealthy({double maxSkipRate = 0.3}) { // פרמטר אופציונלי: מקסימום 30% דילוגים
-    if (_frameCounter < _debugFrameInterval) return true; // אם אין מספיק נתונים - נחשב תקין
+  bool isStreamHealthy({double maxSkipRate = 0.3}) {
+    if (_frameCounter < _debugFrameInterval) return true;
 
-    return (_skippedFrames / _frameCounter) <= maxSkipRate; // בדיקה שאחוז הדילוגים <= 30%
-    // _skippedFrames / _frameCounter = יחס הדילוגים (0 עד 1)
-    // <= maxSkipRate = צריך להיות קטן או שווה ל-0.3 (30%)
+    return (_skippedFrames / _frameCounter) <= maxSkipRate;
   }
 
-  /// אתחול המצלמה ובחירת מצלמה אחורית לזיהוי מכשולים.
-  Future<void> initialize({ // פונקציה אסינכרונית שמאתחלת את המצלמה
-    ResolutionPreset preset = ResolutionPreset.low, // פרמטר אופציונלי: רזולוציית המצלמה (ברירת מחדל: נמוכה)
+  /// מאתחל את המצלמה ובוחר מצלמה אחורית אם קיימת.
+  Future<void> initialize({
+    ResolutionPreset preset = ResolutionPreset.low,
   }) async {
-    _debug('initialize() | preset=$preset'); // הדפסת הודעת debug
+    _debug('initialize() | preset=$preset');
 
-    if (_isInitialized) return; // אם המצלמה כבר מאותחלת - יציאה (מונע אתחול כפול)
+    if (_isInitialized) return;
 
-    try { // בלוק try-catch לטיפול בשגיאות
-      // בקשת הרשאת מצלמה.
-      final status = await Permission.camera.request(); // בקשת הרשאה למצלמה מהמשתמש
-      // await - ממתין שהמשתמש יאשר/ידחה
-      // status = מצב ההרשאה (granted, denied, permanentlyDenied וכו')
+    try {
+      final status = await Permission.camera.request();
 
-      if (!status.isGranted) { // בדיקה אם ההרשאה ניתנה
-        throw Exception('Camera permission denied'); // זריקת חריגה אם לא
+      if (!status.isGranted) {
+        throw Exception('Camera permission denied');
       }
 
-      // קבלת רשימת המצלמות במכשיר.
-      final cameras = await availableCameras(); // קבלת רשימת כל המצלמות הזמינות במכשיר
-      // בדרך כלל: מצלמה קדמית ואחורית
+      final cameras = await availableCameras();
 
-      if (cameras.isEmpty) { // בדיקה שיש מצלמות
-        throw Exception('No cameras available'); // זריקת חריגה אם אין מצלמות
+      if (cameras.isEmpty) {
+        throw Exception('No cameras available');
       }
 
-      // העדפת מצלמה אחורית לצורך זיהוי הסביבה.
-      final selectedCamera = cameras.firstWhere( // מציאת המצלמה המתאימה ביותר
-            (camera) => // פונקציה שבודקת כל מצלמה
-        camera.lensDirection == CameraLensDirection.back, // בודק אם זו מצלמה אחורית
-        orElse: () => cameras.first, // אם לא נמצאה מצלמה אחורית - השתמש בראשונה ברשימה
+      // עדיפות למצלמה אחורית לזיהוי סביבתי.
+      final selectedCamera = cameras.firstWhere(
+            (camera) =>
+        camera.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
       );
 
-      // יצירת בקר מצלמה בפורמט מתאים לעיבוד תמונה.
-      _controller = CameraController( // יצירת בקר מצלמה חדש
-        selectedCamera, // המצלמה שנבחרה
-        preset, // רזולוציה (low = מהיר יותר, high = איכותי יותר)
-        enableAudio: false, // לא מקליט אודיו (רק וידאו)
-        imageFormatGroup: ImageFormatGroup.yuv420, // פורמט תמונה YUV420 - מתאים לעיבוד במודלי AI
+      _controller = CameraController(
+        selectedCamera,
+        preset,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.yuv420,
       );
 
-      await _controller!.initialize(); // אתחול הבקר - ממתין שהמצלמה תהיה מוכנה
-      // ! = force unwrap - אנחנו בטוחים ש-_controller לא null (יצרנו אותו בשורה הקודמת)
+      await _controller!.initialize();
 
-      // אופטימיזציה לאיכות זיהוי.
-      await _controller!.setFocusMode(FocusMode.auto); // הגדרת פוקוס אוטומטי
-      await _controller!.setExposureMode(ExposureMode.auto); // הגדרת חשיפה אוטומטית
-      await _controller!.setFlashMode(FlashMode.off); // כיבוי הפלאש (לא נדרש לזיהוי)
+      // הגדרות בסיסיות לשיפור יציבות התמונה.
+      await _controller!.setFocusMode(FocusMode.auto);
+      await _controller!.setExposureMode(ExposureMode.auto);
+      await _controller!.setFlashMode(FlashMode.off);
 
-      _isInitialized = true; // עדכון הדגל שהמצלמה אותחלה בהצלחה
+      _isInitialized = true;
 
-      _debug('Camera initialized successfully'); // הדפסת הודעת הצלחה
-    } on CameraException catch (e) { // תפיסת שגיאות ספציפיות של המצלמה
-      _controller = null; // איפוס הבקר
-      _isInitialized = false; // עדכון הדגל שהאתחול נכשל
+      _debug('Camera initialized successfully');
+    } on CameraException catch (e) {
+      _controller = null;
+      _isInitialized = false;
 
-      _debug('CameraException: ${e.code} - ${e.description}'); // הדפסת פרטי השגיאה
+      _debug('CameraException: ${e.code} - ${e.description}');
 
-      throw Exception('Camera error: ${e.description}'); // זריקת חריגה חדשה עם תיאור ברור
-    } catch (_) { // תפיסת כל שאר השגיאות
-      _controller = null; // איפוס הבקר
-      _isInitialized = false; // עדכון הדגל
+      throw Exception('Camera error: ${e.description}');
+    } catch (_) {
+      _controller = null;
+      _isInitialized = false;
 
-      rethrow; // זריקת השגיאה המקורית הלאה
+      rethrow;
     }
   }
 
-  /// מתחיל הזרמת פריימים למנוע הזיהוי.
-  Future<void> startStream( // פונקציה שמתחילה את הזרמת הפריימים
-      Future<void> Function(CameraImage image) onFrame, // callback - פונקציה שנקראת עם כל פריים חדש
+  /// מתחיל הזרמת פריימים למנגנון הזיהוי.
+  Future<void> startStream(
+      Future<void> Function(CameraImage image) onFrame,
       ) async {
-    if (_controller == null || !_isInitialized) return; // בדיקה שהמצלמה מאותחלת
-    if (_controller!.value.isStreamingImages) return; // בדיקה שכבר לא מזרימים (למנוע הזרמה כפולה)
+    if (_controller == null || !_isInitialized) return;
+    if (_controller!.value.isStreamingImages) return;
 
-    resetStats(); // איפוס מוני הסטטיסטיקה
+    resetStats();
 
-    await _controller!.startImageStream( // התחלת הזרמת פריימים מהמצלמה
-          (CameraImage image) async { // פונקציה שנקראת עם כל פריים חדש
-        _frameCounter++; // הגדלת מונה הפריימים הכולל
+    await _controller!.startImageStream(
+          (CameraImage image) async {
+        _frameCounter++;
 
-        // מניעת עיבוד מספר פריימים במקביל.
-        if (_isProcessing) { // אם עדיין מעבדים פריים קודם
-          _skippedFrames++; // הגדלת מונה הדילוגים
+        // מונע עיבוד מקביל של כמה פריימים.
+        if (_isProcessing) {
+          _skippedFrames++;
 
-          if (kDebugMode && // אם במצב debug
-              _frameCounter % _debugFrameInterval == 0) { // וכל 15 פריימים
-            final skippedRate = // חישוב אחוז הדילוגים
-            (_skippedFrames / _frameCounter * 100) // (דילוגים / סך הכל * 100)
-                .toStringAsFixed(1); // עיגול לספרה אחת אחרי הנקודה
+          if (kDebugMode &&
+              _frameCounter % _debugFrameInterval == 0) {
+            final skippedRate =
+            (_skippedFrames / _frameCounter * 100)
+                .toStringAsFixed(1);
 
-            _debug( // הדפסת סטטיסטיקות
-              'frame=$_frameCounter | ' // מספר פריים
-                  'skipped=$_skippedFrames ($skippedRate%)', // דילוגים ואחוז
+            _debug(
+              'frame=$_frameCounter | '
+                  'skipped=$_skippedFrames ($skippedRate%)',
             );
           }
 
-          return; // יציאה מהפונקציה - לא מעבדים את הפריים הזה
+          return;
         }
 
-        _isProcessing = true; // סימון שאנחנו מעבדים פריים
+        _isProcessing = true;
 
-        try { // בלוק try-catch לטיפול בשגיאות בעיבוד
-          // העברת הפריים למנגנון הזיהוי.
-          await onFrame(image); // קריאה ל-callback עם הפריים
-          // await - ממתין שהעיבוד יסתיים (יכול לקחת זמן)
-        } catch (e, stack) { // תפיסת שגיאות
-          _debug('onFrame error: $e\n$stack'); // הדפסת פרטי השגיאה
-        } finally { // בלוק finally - תמיד רץ, גם אם יש שגיאה
-          _isProcessing = false; // סימון שסיימנו לעבד את הפריים
+        try {
+          await onFrame(image);
+        } catch (e, stack) {
+          _debug('onFrame error: $e\n$stack');
+        } finally {
+          _isProcessing = false;
         }
       },
     );
 
-    _debug('Camera stream started'); // הדפסת הודעה שההזרמה התחילה
+    _debug('Camera stream started');
   }
 
   /// עוצר את הזרמת הפריימים.
-  Future<void> stopStream() async { // פונקציה שעוצרת את הזרמת הפריימים
-    if (_controller?.value.isStreamingImages == true) { // בדיקה שהמצלמה מזרימה כרגע
-      await _controller!.stopImageStream(); // עצירת ההזרמה
-      _debug('Camera stream stopped'); // הדפסת הודעה
+  Future<void> stopStream() async {
+    if (_controller?.value.isStreamingImages == true) {
+      await _controller!.stopImageStream();
+      _debug('Camera stream stopped');
     }
   }
 
-  /// מאפס נתוני ניטור ביצועים.
-  void resetStats() { // איפוס כל המונים
-    _frameCounter = 0; // איפוס מונה פריימים כולל
-    _skippedFrames = 0; // איפוס מונה דילוגים
+  /// מאפס את נתוני הביצועים.
+  void resetStats() {
+    _frameCounter = 0;
+    _skippedFrames = 0;
   }
 
-  /// שחרור משאבי המצלמה בעת סגירת המסך.
-  Future<void> dispose() async { // פונקציה שמשחררת את כל המשאבים
-    _debug('dispose()'); // הדפסת הודעה
+  /// משחרר את משאבי המצלמה.
+  Future<void> dispose() async {
+    _debug('dispose()');
 
-    await stopStream(); // עצירת הזרמת פריימים
-    await _controller?.dispose(); // שחרור משאבי המצלמה (זיכרון, חיישנים וכו')
+    await stopStream();
+    await _controller?.dispose();
 
-    _controller = null; // איפוס הבקר
-    _isInitialized = false; // עדכון דגל אתחול
-    _isProcessing = false; // עדכון דגל עיבוד
+    _controller = null;
+    _isInitialized = false;
+    _isProcessing = false;
 
-    resetStats(); // איפוס סטטיסטיקות
+    resetStats();
   }
 
-  /// הדפסת הודעות פיתוח בלבד.
-  void _debug(String message) { // פונקציה פרטית להדפסת debug
-    if (!kDebugMode) return; // אם לא במצב debug - יציאה
+  /// מדפיס לוגים במצב פיתוח בלבד.
+  void _debug(String message) {
+    if (!kDebugMode) return;
 
-    final time = DateTime.now() // קבלת הזמן הנוכחי
-        .toIso8601String() // המרה לפורמט ISO 8601
-        .split('T') // פיצול לפי T
-        .last // לקיחת השעה
-        .split('.') // פיצול לפי נקודה
-        .first; // לקיחת שעה ללא מילישניות
+    final time = DateTime.now()
+        .toIso8601String()
+        .split('T')
+        .last
+        .split('.')
+        .first;
 
-    debugPrint('[CameraService][$time] $message'); // הדפסה בפורמט: [שם השירות][שעה] הודעה
+    debugPrint('[CameraService][$time] $message');
   }
 }

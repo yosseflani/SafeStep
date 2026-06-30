@@ -1,639 +1,372 @@
-import 'package:flutter/foundation.dart'; // ייבוא foundation - כולל debugPrint ו-kDebugMode להדפסת הודעות בזמן פיתוח
+import 'package:flutter/foundation.dart';
 
-import 'package:flutter_tts/flutter_tts.dart'; // ייבוא ספריית Text-To-Speech - מאפשרת הקראת טקסט בקול דרך מנוע הדיבור של המכשיר
+import 'package:flutter_tts/flutter_tts.dart';
 
-import '../models/detection.dart'; // ייבוא מודל Detection - מייצג אובייקט שזוהה על ידי מערכת הזיהוי
+import '../models/detection.dart';
 
-/// שירות האחראי על התרעות קוליות באפליקציה.
-///
-/// השירות מקבל אובייקטים שזוהו, בונה עבורם הודעה קולית,
-/// ומקריא למשתמש רק כאשר התרעות קוליות פעילות.
-///
-/// כולל:
-/// - תמיכה בעברית ובאנגלית
-/// - מניעת דיבור כפול במקביל
-/// - שמירת התרעה חשובה שממתינה בתור
-/// - טיפול במצב שבו מנוע הדיבור נתקע
-/// - הודעות מערכת כמו הפעלה, עצירה ובדיקת קול
+/// שירות לניהול התרעות קוליות באפליקציה.
 class AlertService {
-  // מופע של מנוע הדיבור.
-  // דרכו מתבצעות כל פעולות ההקראה, שינוי השפה, שינוי המהירות ועצירת הדיבור.
-  final FlutterTts _tts = FlutterTts(); // יוצר מופע של FlutterTts - המנוע שמקריא טקסט בקול
+  // מנוע הדיבור של המכשיר.
+  final FlutterTts _tts = FlutterTts();
 
-  // שפת ברירת המחדל של ההתרעות הקוליות.
-  // he-IL מייצג עברית ישראלית.
-  String _language = 'he-IL'; // משתנה פרטי (_ = private) - שפת הדיבור הנוכחית
+  // הגדרות דיבור והתראות.
+  String _language = 'he-IL';
+  double _speechRate = 0.5;
+  bool _voiceAlertsEnabled = true;
 
-  // מהירות הדיבור של מנוע ה-TTS.
-  // ערך נמוך יותר = דיבור איטי יותר.
-  double _speechRate = 0.5; // מהירות דיבור - טווח רגיל: 0.1 (איטי מאוד) עד 2.0 (מהיר מאוד)
+  // מצב הדיבור הנוכחי.
+  bool _isSpeaking = false;
 
-  // האם התרעות קוליות פעילות כרגע.
-  // אם הערך false, השירות לא יקריא התרעות רגילות.
-  bool _voiceAlertsEnabled = true; // דגל שמציין אם התרעות קוליות מופעלות
+  /// מציין האם מתבצע דיבור כרגע.
+  bool get isSpeaking => _isSpeaking;
 
-  // האם מנוע הדיבור מקריא כרגע הודעה.
-  // משמש למניעת דיבור כפול והתנגשות בין התרעות.
-  bool _isSpeaking = false; // דגל שמציין אם המנוע מדבר כרגע
+  // זמן תחילת הדיבור הנוכחי.
+  DateTime? _speakingStartTime;
 
-  /// האם כרגע מתבצע דיבור.
-  ///
-  /// Getter ציבורי לקריאה בלבד.
-  /// מאפשר למחלקות אחרות לבדוק האם השירות מדבר,
-  /// בלי לאפשר להן לשנות את הערך ישירות.
-  bool get isSpeaking => _isSpeaking; // getter - מחזיר את _isSpeaking (לקריאה בלבד מחוץ למחלקה)
+  /// משך דיבור מקסימלי לפני איפוס מצב תקוע.
+  static const Duration _maxSpeakingDuration = Duration(seconds: 5);
 
-  // הזמן שבו התחילה ההקראה הנוכחית.
-  // הערך null כאשר אין דיבור פעיל.
-  DateTime? _speakingStartTime; // nullable - שומר את הזמן שהדיבור התחיל (לזיהוי תקיעות)
+  // התרעה חשובה שממתינה לסיום הדיבור הנוכחי.
+  Detection? _pendingHighPriorityAlert;
 
-  /// זמן מקסימלי שבו אנחנו מאפשרים לדיבור להיחשב פעיל.
-  ///
-  /// אם עבר יותר זמן מזה, נניח שה־TTS נתקע ונאפס אותו.
-  static const Duration _maxSpeakingDuration = Duration(seconds: 5); // קבוע - מקסימום 5 שניות לדיבור
-
-  /// התרעה חשובה שממתינה בזמן שהמערכת כבר מדברת.
-  ///
-  /// אם מגיעות כמה התרעות בזמן דיבור,
-  /// נשמור רק את זו עם ציון הסיכון הגבוה ביותר.
-  Detection? _pendingHighPriorityAlert; // nullable - שומר התרעה אחת שממתינה בתור
-
-  /// אתחול שירות ההתרעות.
-  ///
-  /// יש לקרוא לפונקציה הזו פעם אחת בתחילת השימוש בשירות.
-  Future<void> initialize({ // פונקציה אסינכרונית שמאתחלת את השירות
-    // שפת הדיבור הרצויה, לדוגמה he-IL או en-US.
-    required String language, // חובה לשלוח שפה
-
-    // מהירות הדיבור הרצויה.
-    required double speechRate, // חובה לשלוח מהירות
-
-    // האם התרעות קוליות פעילות.
-    required bool voiceAlertsEnabled, // חובה לשלוח מצב הפעלה
+  /// מאתחל את שירות ההתרעות הקוליות.
+  Future<void> initialize({
+    required String language,
+    required double speechRate,
+    required bool voiceAlertsEnabled,
   }) async {
-    // שמירת שפת הדיבור שהתקבלה מההגדרות.
-    _language = language; // מעדכן את השפה הפנימית
+    _language = language;
 
-    // שמירת מהירות הדיבור תוך הגבלת הערך לטווח תקין.
-    // אם הערך קטן מ-0.1 הוא יעלה ל-0.1,
-    // ואם הוא גדול מ-2.0 הוא ירד ל-2.0.
-    _speechRate = speechRate.clamp(0.1, 2.0); // clamp() - מגביל ערך בין מינימום למקסימום
+    _speechRate = speechRate.clamp(0.1, 2.0);
 
-    // שמירת מצב ההפעלה של התרעות קוליות.
-    _voiceAlertsEnabled = voiceAlertsEnabled; // מעדכן את הדגל
+    _voiceAlertsEnabled = voiceAlertsEnabled;
 
-    // רישום מאזינים לאירועי סיום, שגיאה וביטול של מנוע הדיבור.
-    _registerHandlers(); // קורא לפונקציה שמגדירה callbacks לאירועי TTS
+    _registerHandlers();
 
-    // הגדרת שפת הדיבור בצורה בטוחה,
-    // כולל טיפול במקרה שבו השפה אינה נתמכת במכשיר.
-    await _safeSetLanguage(_language); // מגדיר שפה עם fallback לאנגלית אם נכשל
+    await _safeSetLanguage(_language);
 
-    // הגדרת מהירות הדיבור במנוע ה-TTS.
-    await _tts.setSpeechRate(_speechRate); // מעדכן את מהירות הדיבור במנוע
+    await _tts.setSpeechRate(_speechRate);
 
-    /// גורם ל־speak להסתיים רק אחרי שהדיבור באמת הסתיים.
-    ///
-    /// זה חשוב כדי שהשירות לא יסמן את עצמו כלא מדבר
-    /// לפני שההקראה בפועל הסתיימה.
-    await _tts.awaitSpeakCompletion(true); // true = speak() יחזיר רק אחרי שהדיבור נגמר
+    // ממתין לסיום ההקראה לפני המשך הריצה.
+    await _tts.awaitSpeakCompletion(true);
 
-    // הודעת Debug לצורך בדיקת האתחול בזמן פיתוח.
-    _debug('initialized: lang=$_language, rate=$_speechRate'); // הדפסת הודעת debug
+    _debug('initialized: lang=$_language, rate=$_speechRate');
   }
 
-  /// עדכון הגדרות השירות בזמן ריצה.
-  ///
-  /// משמש כאשר המשתמש משנה שפה, מהירות דיבור
-  /// או מצב הפעלה של התרעות קוליות מתוך מסך ההגדרות.
-  Future<void> updateSettings({ // פונקציה שמעדכנת הגדרות בזמן ריצה
-    // שפת הדיבור החדשה.
-    required String language, // חובה לשלוח שפה חדשה
-
-    // מהירות הדיבור החדשה.
-    required double speechRate, // חובה לשלוח מהירות חדשה
-
-    // האם התרעות קוליות צריכות להיות פעילות.
-    required bool voiceAlertsEnabled, // חובה לשלוח מצב חדש
+  /// מעדכן את הגדרות הדיבור בזמן ריצה.
+  Future<void> updateSettings({
+    required String language,
+    required double speechRate,
+    required bool voiceAlertsEnabled,
   }) async {
-    // עדכון השפה בזיכרון הפנימי של השירות.
-    _language = language; // מעדכן שפה
+    _language = language;
 
-    // עדכון מהירות הדיבור תוך שמירה על טווח בטוח.
-    _speechRate = speechRate.clamp(0.1, 2.0); // מגביל מהירות לטווח תקין
+    _speechRate = speechRate.clamp(0.1, 2.0);
 
-    // עדכון מצב ההפעלה של התרעות קוליות.
-    _voiceAlertsEnabled = voiceAlertsEnabled; // מעדכן דגל
+    _voiceAlertsEnabled = voiceAlertsEnabled;
 
-    // עדכון השפה בפועל במנוע הדיבור.
-    await _safeSetLanguage(_language); // מגדיר שפה במנוע
+    await _safeSetLanguage(_language);
 
-    // עדכון מהירות הדיבור בפועל במנוע הדיבור.
-    await _tts.setSpeechRate(_speechRate); // מגדיר מהירות במנוע
+    await _tts.setSpeechRate(_speechRate);
 
-    // הודעת Debug שמאשרת שההגדרות עודכנו.
-    _debug('settings updated: lang=$_language, rate=$_speechRate'); // הדפסת debug
+    _debug('settings updated: lang=$_language, rate=$_speechRate');
   }
 
-  /// רישום מאזינים לאירועי TTS.
-  ///
-  /// בגלל שאנחנו משתמשים ב־awaitSpeakCompletion(true),
-  /// האיפוס העיקרי מתבצע ב־finally של פונקציות הדיבור.
-  /// כאן אנחנו מטפלים בעיקר בשגיאות ובביטול חיצוני.
-  void _registerHandlers() { // פונקציה פרטית שמגדירה callbacks לאירועי TTS
-    // מאזין שמופעל כאשר ההקראה הסתיימה בהצלחה.
-    _tts.setCompletionHandler(() { // מגדיר callback שרץ כשהדיבור נגמר
-      // כרגע משמש רק להדפסת מידע בזמן פיתוח.
-      // איפוס מצב הדיבור מתבצע במקום המרכזי: finally של _speak.
-      _debug('speech completed'); // הדפסת debug
+  /// רושם מאזינים לאירועי מנוע הדיבור.
+  void _registerHandlers() {
+    _tts.setCompletionHandler(() {
+      _debug('speech completed');
     });
 
-    // מאזין שמופעל כאשר מתרחשת שגיאה במנוע הדיבור.
-    _tts.setErrorHandler((msg) { // מגדיר callback שרץ כשיש שגיאה
-      // msg = הודעת השגיאה מהמנוע
-      // הדפסת פרטי השגיאה לצורך Debug.
-      _debug('speech error: $msg'); // הדפסת debug
+    _tts.setErrorHandler((msg) {
+      _debug('speech error: $msg');
 
-      // איפוס מצב הדיבור כדי למנוע מצב שהשירות יחשוב שהוא עדיין מדבר.
-      _resetSpeakingState(); // מאפס דגלים פנימיים
+      _resetSpeakingState();
 
-      // ניסיון להמשיך להתרעה שהמתינה בתור, אם קיימת.
-      _processPendingAlert(); // מנסה להקריא התרעה ממתינה
+      _processPendingAlert();
     });
 
-    // מאזין שמופעל כאשר הדיבור בוטל,
-    // למשל בעקבות קריאה ל-_tts.stop().
-    _tts.setCancelHandler(() { // מגדיר callback שרץ כשהדיבור בוטל
-      // הדפסת הודעה לצורך Debug.
-      _debug('speech cancelled'); // הדפסת debug
+    _tts.setCancelHandler(() {
+      _debug('speech cancelled');
 
-      // איפוס מצב הדיבור לאחר ביטול.
-      _resetSpeakingState(); // מאפס דגלים פנימיים
+      _resetSpeakingState();
     });
   }
 
   /// מקריא הודעת הפעלת מערכת.
-  ///
-  /// הפונקציה מיועדת להיקרא כאשר המשתמש מפעיל את מערכת הזיהוי.
-  /// לדוגמה: לחיצה על כפתור Start.
-  Future<void> speakSystemStarted() async { // פונקציה שמקריאה "המערכת הופעלה"
-    // אם התרעות קוליות כבויות, אין צורך להשמיע הודעת מערכת.
-    if (!_voiceAlertsEnabled) return; // יציאה אם התרעות כבויות
+  Future<void> speakSystemStarted() async {
+    if (!_voiceAlertsEnabled) return;
 
-    // מקריא הודעת הפעלה בהתאם לשפה הנוכחית של השירות.
-    await _speakSystemMessage( // קורא לפונקציה שמקריאה הודעת מערכת
-      _isHebrew ? 'המערכת הופעלה' : 'System started', // טקסט לפי שפה
+    await _speakSystemMessage(
+      _isHebrew ? 'המערכת הופעלה' : 'System started',
     );
   }
 
   /// מקריא הודעת עצירת מערכת.
-  ///
-  /// הפונקציה מיועדת להיקרא כאשר המשתמש עוצר את מערכת הזיהוי.
-  /// לדוגמה: לחיצה על כפתור Stop.
-  Future<void> speakSystemStopped() async { // פונקציה שמקריאה "המערכת הופסקה"
-    // אם התרעות קוליות כבויות, לא מקריאים את הודעת העצירה.
-    if (!_voiceAlertsEnabled) return; // יציאה אם התרעות כבויות
+  Future<void> speakSystemStopped() async {
+    if (!_voiceAlertsEnabled) return;
 
-    // מקריא הודעת עצירה בהתאם לשפה הנוכחית.
-    await _speakSystemMessage( // קורא לפונקציה שמקריאה הודעת מערכת
-      _isHebrew ? 'המערכת הופסקה' : 'System stopped', // טקסט לפי שפה
+    await _speakSystemMessage(
+      _isHebrew ? 'המערכת הופסקה' : 'System stopped',
     );
   }
-
   /// מקריא הודעת בדיקת קול.
-  ///
-  /// בדיקת קול מתבצעת גם אם התרעות קוליות כבויות,
-  /// כי המשתמש לחץ במפורש על בדיקה.
-  Future<void> speakVoiceTest() async { // פונקציה שמקריאה "זוהי בדיקת קול"
-    // כאן אין בדיקה של _voiceAlertsEnabled בכוונה.
-    // גם אם התרעות קוליות כבויות, המשתמש ביקש לבדוק את הקול ידנית.
-    await _speakSystemMessage( // קורא לפונקציה שמקריאה הודעת מערכת
-      _isHebrew ? 'זוהי בדיקת קול' : 'This is a voice test', // טקסט לפי שפה
+  Future<void> speakVoiceTest() async {
+    await _speakSystemMessage(
+      _isHebrew ? 'זוהי בדיקת קול' : 'This is a voice test',
     );
   }
 
-  /// ניסיון להקריא התרעה עבור אובייקט שזוהה.
-  ///
-  /// הפונקציה מקבלת Detection ממערכת הזיהוי,
-  /// בונה עבורו הודעה קולית ומנסה להקריא אותה.
-  ///
-  /// מחזיר true אם ההודעה התחילה/בוצעה בהצלחה,
-  /// ו־false אם ההודעה לא הוקראה כרגע.
-  Future<bool> trySpeakDetection( // פונקציה שמנסה להקריא התרעה על אובייקט
-      Detection detection, // האובייקט שזוהה
-          {
-        // ציון סיכון עדכני אופציונלי.
-        // אם לא נשלח ערך, נשתמש ב-riskScore שנמצא בתוך detection.
-        double? currentRisk, // פרמטר אופציונלי - ציון סיכון עדכני
+  /// מנסה להקריא התרעה עבור אובייקט שזוהה.
+  Future<bool> trySpeakDetection(
+      Detection detection,
+      {
+        double? currentRisk,
       }) async {
-    // אם התרעות קוליות כבויות, לא מקריאים התרעות אובייקטים.
-    if (!_voiceAlertsEnabled) return false; // יציאה אם התרעות כבויות
+    if (!_voiceAlertsEnabled) return false;
 
-    // לפני ניסיון דיבור חדש, בודקים אם מנוע הדיבור תקוע.
-    // אם הוא תקוע מעבר לזמן המותר, נאפס אותו.
-    await _recoverIfSpeechIsStuck(); // בודק ומאפס אם המנוע תקוע
+    await _recoverIfSpeechIsStuck();
 
-    // קביעת ציון הסיכון שבו נשתמש.
-    // אם currentRisk אינו null, הוא מקבל עדיפות.
-    // אחרת משתמשים בציון הסיכון שמגיע מתוך detection.
-    final risk = currentRisk ?? detection.riskScore; // ?? - אם currentRisk null, משתמש ב-detection.riskScore
+    final risk = currentRisk ?? detection.riskScore;
 
-    /// אם כבר יש דיבור פעיל, לא נקטע אותו מיד.
-    /// במקום זאת נשמור את ההתרעה הכי מסוכנת להקראה בהמשך.
-    if (_isSpeaking) { // אם המנוע כבר מדבר
-      // שומר את ההתרעה בתור רק אם היא מסוכנת יותר מהתרעה שכבר ממתינה.
-      _queueIfHigherPriority(detection, risk); // שומר בתור אם מסוכן יותר
+    // אם מתבצע דיבור, שומר רק את ההתרעה החשובה ביותר.
+    if (_isSpeaking) {
+      _queueIfHigherPriority(detection, risk);
 
-      // ההתרעה לא הוקראה כרגע, ולכן מחזירים false.
-      return false; // מחזיר false - לא הוקרא כרגע
+      return false;
     }
 
-    // בניית הטקסט שיוקרא למשתמש.
-    // לדוגמה: "אדם לפניך" או "מכונית קרוב מאוד".
-    final message = _buildMessage(detection, riskScore: risk); // בונה משפט התרעה
+    final message = _buildMessage(detection, riskScore: risk);
 
-    // קריאה לפונקציית הדיבור המרכזית.
-    // כל פעולות הדיבור עוברות דרך _speak כדי לשמור על התנהגות אחידה.
-    return _speak( // קורא לפונקציית הדיבור המרכזית
-      message, // הטקסט להקראה
-
-      // מידע לצורכי Debug: איזה אובייקט זוהה ומה ציון הסיכון שלו.
-      debugContext: 'detection=${detection.tag}, risk=${risk.toStringAsFixed(1)}', // מידע ל-debug
-
-      // לאחר סיום הדיבור, נבדוק אם יש התרעה חשובה שממתינה בתור.
-      processPendingAfterSpeech: true, // אחרי הדיבור - בדוק תור
+    return _speak(
+      message,
+      debugContext: 'detection=${detection.tag}, risk=${risk.toStringAsFixed(1)}',
+      processPendingAfterSpeech: true,
     );
   }
 
-  /// עוצר את הדיבור הנוכחי ומנקה את התור.
-  ///
-  /// מתאים למצבים שבהם המשתמש עוצר את המערכת,
-  /// המסך נסגר, או רוצים לוודא שלא תישאר התרעה ישנה להשמעה.
-  Future<void> stop() async { // פונקציה שעוצרת הכל
-    // עצירת מנוע הדיבור בפועל.
-    await _tts.stop(); // עוצר את המנוע
+  /// עוצר דיבור פעיל ומנקה התרעות ממתינות.
+  Future<void> stop() async {
+    await _tts.stop();
 
-    // איפוס מצב הדיבור הפנימי של השירות.
-    _resetSpeakingState(); // מאפס דגלים פנימיים
+    _resetSpeakingState();
 
-    // ניקוי התרעה חשובה שממתינה בתור.
-    // כך לא תושמע התרעה ישנה אחרי שהמערכת נעצרה.
-    _pendingHighPriorityAlert = null; // מנקה תור
+    _pendingHighPriorityAlert = null;
 
-    // הודעת Debug לצורך בדיקה בזמן פיתוח.
-    _debug('stopped'); // הדפסת debug
+    _debug('stopped');
   }
 
-  /// איפוס ידני של מצב הדיבור והתור.
-  ///
-  /// שונה מ-stop בכך שהוא לא קורא ל-_tts.stop().
-  /// כלומר הוא מאפס את המשתנים הפנימיים בלבד.
-  void resetSpeakingState() { // פונקציה ציבורית לאיפוס מצב דיבור
-    // איפוס מצב הדיבור.
-    _resetSpeakingState(); // קורא לפונקציה הפרטית
+  /// מאפס את מצב הדיבור והתור ללא עצירת TTS.
+  void resetSpeakingState() {
+    _resetSpeakingState();
 
-    // ניקוי התרעה שממתינה בתור.
-    _pendingHighPriorityAlert = null; // מנקה תור
+    _pendingHighPriorityAlert = null;
   }
 
-  /// שחרור משאבים.
-  ///
-  /// מומלץ לקרוא לזה מתוך dispose של המסך או של ה־Controller.
-  /// המטרה היא לוודא שמנוע הדיבור נעצר ואין התרעות שממתינות ברקע.
-  Future<void> dispose() async { // פונקציה לשחרור משאבים
-    // משתמשים בפונקציית stop כדי לעצור דיבור ולנקות תור.
-    await stop(); // עוצר הכל
+  /// משחרר משאבי דיבור פעילים.
+  Future<void> dispose() async {
+    await stop();
   }
 
-  /// מקריא הודעת מערכת.
-  ///
-  /// הודעות מערכת קוטעות התרעה רגילה כדי לתת למשתמש משוב מיידי.
-  /// לדוגמה: "המערכת הופעלה", "המערכת הופסקה", "זוהי בדיקת קול".
-  Future<void> _speakSystemMessage(String message) async { // פונקציה פרטית שמקריאה הודעת מערכת
-    // בדיקה האם מנוע הדיבור תקוע לפני שמנסים להשמיע הודעה חדשה.
-    await _recoverIfSpeechIsStuck(); // בודק ומאפס אם תקוע
+  /// מקריא הודעת מערכת בעדיפות גבוהה.
+  Future<void> _speakSystemMessage(String message) async {
+    await _recoverIfSpeechIsStuck();
 
-    // אם כבר מתבצע דיבור, הודעת מערכת מקבלת עדיפות וקוטעת אותו.
-    if (_isSpeaking) { // אם מדבר כרגע
-      // עצירת הדיבור הנוכחי.
-      await _tts.stop(); // עוצר דיבור
+    if (_isSpeaking) {
+      await _tts.stop();
 
-      // איפוס מצב הדיבור לאחר העצירה.
-      _resetSpeakingState(); // מאפס דגלים
+      _resetSpeakingState();
     }
 
-    // השמעת הודעת המערכת דרך פונקציית הדיבור המרכזית.
-    await _speak( // קורא לפונקציית הדיבור המרכזית
-      message, // הטקסט להקראה
-
-      // מידע לצורכי Debug שמסמן שמדובר בהודעת מערכת.
-      debugContext: 'system message', // מידע ל-debug
-
-      // לאחר הודעת מערכת, אפשר לעבד התרעה חשובה שממתינה בתור.
-      processPendingAfterSpeech: true, // אחרי הדיבור - בדוק תור
+    await _speak(
+      message,
+      debugContext: 'system message',
+      processPendingAfterSpeech: true,
     );
   }
 
-  /// פונקציית דיבור מרכזית.
-  ///
-  /// כל הקריאות ל־TTS עוברות דרכה כדי לשמור על התנהגות אחידה.
-  /// הפונקציה אחראית על:
-  /// - בדיקת הודעה ריקה
-  /// - סימון שהשירות מדבר
-  /// - שמירת זמן התחלת הדיבור
-  /// - קריאה בפועל ל-TTS
-  /// - טיפול בשגיאות
-  /// - איפוס מצב הדיבור בסיום
-  /// - הפעלת התרעה ממתינה אם קיימת
-  Future<bool> _speak( // פונקציה פרטית שמקריאה טקסט
-      // הטקסט שרוצים להקריא.
-      String message, // הטקסט להקראה
-          {
-        // טקסט עזר ללוגים בזמן פיתוח.
-        required String debugContext, // חובה - מידע ל-debug
-
-        // האם לבדוק ולהקריא התרעה ממתינה אחרי סיום הדיבור.
-        required bool processPendingAfterSpeech, // חובה - האם לבדוק תור אחרי
+  /// פונקציית הדיבור המרכזית של השירות.
+  Future<bool> _speak(
+      String message,
+      {
+        required String debugContext,
+        required bool processPendingAfterSpeech,
       }) async {
-    // אם ההודעה ריקה או מכילה רק רווחים, אין מה להקריא.
-    if (message.trim().isEmpty) return false; // trim() מסיר רווחים, isEmpty בודק אם ריק
+    if (message.trim().isEmpty) return false;
 
-    // סימון שהשירות נמצא כרגע במצב דיבור.
-    _isSpeaking = true; // מדליק דגל "מדבר"
+    _isSpeaking = true;
 
-    // שמירת זמן התחלת הדיבור לצורך זיהוי מצב שבו ה-TTS נתקע.
-    _speakingStartTime = DateTime.now(); // שומר זמן התחלה
+    _speakingStartTime = DateTime.now();
 
-    try { // בלוק try-catch-finally לטיפול בשגיאות
-      // הדפסת הודעת Debug עם הטקסט שמוקרא וההקשר שלו.
-      _debug('speaking "$message" ($debugContext)'); // הדפסת debug
+    try {
+      _debug('speaking "$message" ($debugContext)');
 
-      // הפעלת מנוע הדיבור בפועל.
-      // בגלל awaitSpeakCompletion(true), הקריאה אמורה להסתיים רק אחרי שהדיבור הסתיים.
-      await _tts.speak(message); // מקריא את הטקסט - ממתין לסיום
+      await _tts.speak(message);
 
-      // אם לא הייתה שגיאה, ההקראה הצליחה.
-      return true; // מחזיר true - הצליח
-    } catch (e) { // תפיסת שגיאות
-      // טיפול בשגיאה אפשרית של מנוע הדיבור.
-      _debug('speak failed: $e'); // הדפסת debug
+      return true;
+    } catch (e) {
+      _debug('speak failed: $e');
 
-      // ההקראה נכשלה.
-      return false; // מחזיר false - נכשל
-    } finally { // finally רץ תמיד - גם בהצלחה וגם בכישלון
-      // finally רץ תמיד — גם בהצלחה וגם בכישלון.
-      // לכן זה המקום הבטוח ביותר לאפס את מצב הדיבור.
-      _resetSpeakingState(); // מאפס דגלים
+      return false;
+    } finally {
+      _resetSpeakingState();
 
-      // אם יש התרעה חשובה שממתינה בתור, ננסה להפעיל אותה אחרי סיום הדיבור.
-      if (processPendingAfterSpeech) { // אם צריך לבדוק תור
-        _processPendingAlert(); // מנסה להקריא התרעה ממתינה
+      if (processPendingAfterSpeech) {
+        _processPendingAlert();
       }
     }
   }
 
-  /// אם הדיבור נתקע מעבר לזמן המותר — עוצרים ומאפסים.
-  ///
-  /// הפונקציה נועדה למנוע מצב שבו השירות נשאר תקוע עם _isSpeaking=true
-  /// למרות שבפועל מנוע הדיבור כבר לא מקריא או לא החזיר אירוע סיום.
-  Future<void> _recoverIfSpeechIsStuck() async { // פונקציה פרטית שבודקת תקיעות
-    // אם הדיבור לא תקוע, אין צורך לעשות כלום.
-    if (!_isSpeakingStuck()) return; // בודק אם תקוע - אם לא, יוצא
+  /// מאפס מצב דיבור אם מנוע ה־TTS נתקע.
+  Future<void> _recoverIfSpeechIsStuck() async {
+    if (!_isSpeakingStuck()) return;
 
-    // הודעת Debug כדי שנוכל לזהות בזמן פיתוח שהתרחש מצב תקוע.
-    _debug('speech stuck, resetting'); // הדפסת debug
+    _debug('speech stuck, resetting');
 
-    // עצירת מנוע הדיבור בפועל.
-    await _tts.stop(); // עוצר מנוע
+    await _tts.stop();
 
-    // איפוס מצב הדיבור הפנימי של השירות.
-    _resetSpeakingState(); // מאפס דגלים
+    _resetSpeakingState();
   }
 
-  /// בודק האם מצב הדיבור תקוע.
-  ///
-  /// מחזיר true אם השירות מסומן כמדבר יותר מדי זמן,
-  /// או אם הוא מסומן כמדבר בלי שיש זמן התחלה תקין.
-  bool _isSpeakingStuck() { // פונקציה פרטית שבודקת תקיעות
-    // אם השירות לא מדבר כרגע, הוא לא יכול להיות תקוע.
-    if (!_isSpeaking) return false; // אם לא מדבר - לא תקוע
+  /// בודק האם מצב הדיבור נתקע.
+  bool _isSpeakingStuck() {
+    if (!_isSpeaking) return false;
 
-    // אם השירות מסומן כמדבר אבל אין זמן התחלה,
-    // זה מצב לא תקין ולכן נחשב כתקוע.
-    if (_speakingStartTime == null) return true; // אם אין זמן התחלה - תקוע
+    if (_speakingStartTime == null) return true;
 
-    // מחשב כמה זמן עבר מאז תחילת הדיבור.
-    // אם עבר יותר מהזמן המקסימלי שהוגדר, נחשיב את הדיבור כתקוע.
-    return DateTime.now().difference(_speakingStartTime!) > // ! = force unwrap - בטוח שאינו null
-        _maxSpeakingDuration; // משווה ל-5 שניות
+    return DateTime.now().difference(_speakingStartTime!) >
+        _maxSpeakingDuration;
   }
 
-  /// איפוס מצב הדיבור בלבד.
-  ///
-  /// הפונקציה לא עוצרת את מנוע ה-TTS עצמו,
-  /// אלא רק מעדכנת את המשתנים הפנימיים של השירות.
-  void _resetSpeakingState() { // פונקציה פרטית שמאפסת דגלים
-    // סימון שאין כרגע דיבור פעיל.
-    _isSpeaking = false; // מכבה דגל "מדבר"
+  /// מאפס את מצב הדיבור הפנימי.
+  void _resetSpeakingState() {
+    _isSpeaking = false;
 
-    // ניקוי זמן תחילת הדיבור.
-    _speakingStartTime = null; // מנקה זמן התחלה
+    _speakingStartTime = null;
   }
 
-  /// שמירת התרעה ממתינה רק אם היא חשובה יותר מהקיימת.
-  ///
-  /// כאשר השירות כבר מדבר ומגיעה התרעה חדשה,
-  /// לא מקריאים אותה מיד כדי למנוע דיבור כפול.
-  /// במקום זאת שומרים רק את ההתרעה בעלת ציון הסיכון הגבוה ביותר.
-  void _queueIfHigherPriority(Detection detection, double risk) { // פונקציה פרטית ששומרת בתור
-    // שליפת ציון הסיכון של ההתרעה שכבר ממתינה.
-    // אם אין התרעה ממתינה, משתמשים ב--1 כדי שכל התרעה אמיתית תהיה גבוהה יותר.
-    final currentPendingRisk = _pendingHighPriorityAlert?.riskScore ?? -1; // ?. = null-aware, ?? = fallback ל--1
+  /// שומר בתור רק התרעה בעלת עדיפות גבוהה יותר.
+  void _queueIfHigherPriority(Detection detection, double risk) {
+    final currentPendingRisk = _pendingHighPriorityAlert?.riskScore ?? -1;
 
-    // אם ההתרעה החדשה מסוכנת יותר מזו שכבר ממתינה, נשמור אותה.
-    if (risk > currentPendingRisk) { // אם החדש מסוכן יותר
-      // שמירת עותק של הזיהוי עם ציון הסיכון העדכני.
-      // copyWith מונע שינוי ישיר של האובייקט המקורי.
-      _pendingHighPriorityAlert = detection.copyWith(riskScore: risk); // שומר עותק עם risk חדש
+    if (risk > currentPendingRisk) {
+      _pendingHighPriorityAlert = detection.copyWith(riskScore: risk);
 
-      // הודעת Debug שמציינת שההתרעה נשמרה בתור.
-      _debug( // הדפסת debug
-        'queued high priority: ${detection.tag}, risk=${risk.toStringAsFixed(1)}', // מידע על ההתרעה
+      _debug(
+        'queued high priority: ${detection.tag}, risk=${risk.toStringAsFixed(1)}',
       );
     } else {
-      // אם ההתרעה החדשה פחות מסוכנת, מתעלמים ממנה.
-      _debug( // הדפסת debug
-        'ignored lower priority: ${detection.tag}, risk=${risk.toStringAsFixed(1)}', // מידע על ההתרעה
+      _debug(
+        'ignored lower priority: ${detection.tag}, risk=${risk.toStringAsFixed(1)}',
       );
     }
   }
 
-  /// מקריא התרעה ממתינה לאחר שהדיבור הקודם הסתיים.
-  ///
-  /// הפונקציה בודקת האם קיימת התרעה שממתינה בתור,
-  /// ואם כן מנסה להקריא אותה לאחר השהיה קצרה.
-  void _processPendingAlert() { // פונקציה פרטית שמעבדת התרעה ממתינה
-    // אם אין התרעה ממתינה, אין מה לעבד.
-    if (_pendingHighPriorityAlert == null) return; // יציאה אם אין התרעה בתור
+  /// מנסה להקריא התרעה ממתינה לאחר סיום דיבור קודם.
+  void _processPendingAlert() {
+    if (_pendingHighPriorityAlert == null) return;
 
-    // שמירת ההתרעה במשתנה מקומי.
-    // הסימן ! בטוח כאן כי כבר בדקנו שהערך אינו null.
-    final pending = _pendingHighPriorityAlert!; // ! = force unwrap - בטוח שאינו null
+    final pending = _pendingHighPriorityAlert!;
 
-    // ניקוי התור לפני ההשמעה כדי למנוע השמעה חוזרת של אותה התרעה.
-    _pendingHighPriorityAlert = null; // מנקה תור
+    _pendingHighPriorityAlert = null;
 
-    // השהיה קצרה לפני ההקראה הבאה.
-    // זה מאפשר למנוע ה-TTS לסיים את הדיבור הקודם בצורה יציבה.
-    Future.delayed(const Duration(milliseconds: 150), () { // ממתין 150ms לפני ביצוע
-      // אם בזמן ההשהיה התרעות קוליות כובו,
-      // או אם התחיל דיבור אחר, לא מקריאים את ההתרעה הממתינה.
-      if (!_voiceAlertsEnabled || _isSpeaking) return; // יציאה אם כבויות או מדבר
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (!_voiceAlertsEnabled || _isSpeaking) return;
 
-      // ניסיון להקריא את ההתרעה הממתינה.
-      // אין כאן await כי הפונקציה עצמה היא void ומפעילה פעולה עתידית.
-      trySpeakDetection(pending); // מקריא את ההתרעה
+      trySpeakDetection(pending);
     });
   }
 
-  /// הגדרת שפה בצורה בטוחה.
-  ///
-  /// אם השפה לא נתמכת, ננסה לעבור לאנגלית כברירת מחדל.
-  /// המטרה היא למנוע קריסה של השירות בגלל בעיית תמיכה בשפה במכשיר.
-  Future<void> _safeSetLanguage(String language) async { // פונקציה פרטית שמגדירה שפה בבטחה
-    try { // בלוק try-catch לטיפול בשגיאות
-      // ניסיון להגדיר את השפה במנוע הדיבור.
-      final result = await _tts.setLanguage(language); // מנסה להגדיר שפה
+  /// מגדיר שפה במנוע הדיבור עם fallback לאנגלית.
+  Future<void> _safeSetLanguage(String language) async {
+    try {
+      final result = await _tts.setLanguage(language);
 
-      // בחלק מהמימושים של flutter_tts, הערך 1 מסמן הצלחה.
-      // אם התקבל ערך אחר, נרשום אזהרה אך לא נעצור את האפליקציה.
-      if (result != 1) { // אם לא הצליח
-        _debug('language may not be fully supported: $language'); // הדפסת debug
+      if (result != 1) {
+        _debug('language may not be fully supported: $language');
       }
-    } catch (e) { // תפיסת שגיאות
-      // אם הגדרת השפה נכשלה לגמרי, עוברים לאנגלית כברירת מחדל.
-      _debug('language error, falling back to en-US: $e'); // הדפסת debug
+    } catch (e) {
+      _debug('language error, falling back to en-US: $e');
 
-      // עדכון השפה הפנימית של השירות.
-      _language = 'en-US'; // משנה לאנגלית
+      _language = 'en-US';
 
-      // ניסיון להגדיר את האנגלית במנוע הדיבור.
-      await _tts.setLanguage(_language); // מגדיר אנגלית
+      await _tts.setLanguage(_language);
     }
   }
 
-  /// בניית משפט ההתרעה.
-  ///
-  /// מחברת בין שם האובייקט המתורגם לבין טקסט החומרה לפי ציון הסיכון.
-  /// לדוגמה:
-  /// - "אדם לפניך"
-  /// - "מכונית קרוב מאוד"
-  /// - "ספסל בסביבה"
-  String _buildMessage( // פונקציה פרטית שבונה משפט התרעה
-      Detection detection, // האובייקט שזוהה
-          {
-        // ציון הסיכון שעל פיו ייבחר טקסט החומרה.
-        required double riskScore, // חובה - ציון סיכון
+  /// בונה את משפט ההתרעה שיוקרא למשתמש.
+  String _buildMessage(
+      Detection detection,
+      {
+        required double riskScore,
       }) {
-    // בניית משפט התרעה לפי שפת המערכת.
-    return '${_localizedLabel(detection.tag)} ${_severityText(riskScore)}'; // מחזיר "שם_אובייקט רמת_חומרה"
+    return '${_localizedLabel(detection.tag)} ${_severityText(riskScore)}';
   }
 
-  /// פונקציה ציבורית לקבלת שם מתורגם של אובייקט.
-  ///
-  /// מאפשרת למחלקות אחרות באפליקציה להשתמש באותו תרגום
-  /// שמשרת גם את ההתרעות הקוליות.
-  String localizedLabel(String tag) => _localizedLabel(tag); // wrapper לפונקציה הפרטית
+  /// מחזיר שם אובייקט מתורגם.
+  String localizedLabel(String tag) => _localizedLabel(tag);
 
-  /// פונקציה ציבורית לקבלת טקסט חומרה לפי ציון סיכון.
-  ///
-  /// מאפשרת למחלקות אחרות להציג או להשתמש באותה לוגיקת חומרה
-  /// שמשרתת את ההודעות הקוליות.
-  String severityText(double riskScore) => _severityText(riskScore); // wrapper לפונקציה הפרטית
+  /// מחזיר טקסט חומרה לפי ציון סיכון.
+  String severityText(double riskScore) => _severityText(riskScore);
 
-  /// האם השפה הנוכחית היא עברית.
-  ///
-  /// startsWith('he') מאפשר לזהות גם he-IL וגם פורמטים אחרים שמתחילים ב-he.
-  bool get _isHebrew => _language.startsWith('he'); // getter - בודק אם השפה מתחילה ב-"he"
+  /// מציין האם שפת המערכת היא עברית.
+  bool get _isHebrew => _language.startsWith('he');
 
-  /// תרגום תגית האובייקט לפי שפת המערכת.
-  ///
-  /// אם השפה אינה עברית, מוחזר שם באנגלית.
-  /// אם השפה עברית, מוחזר תרגום עברי.
-  /// אם התגית לא מוכרת, מוחזרת התגית המקורית כדי למנוע כשל.
-  String _localizedLabel(String tag) { // פונקציה פרטית שמחזירה שם מתורגם של אובייקט
-    // אם השפה אינה עברית, מחזירים שמות באנגלית.
-    if (!_isHebrew) { // בודק אם לא עברית
-      return switch (tag) { // switch expression - תחביר חדש ב-Dart
-        'crosswalk' => 'crosswalk', // מעבר חציה
-        'person' => 'person', // אדם
-        'car' => 'car', // מכונית
-        'motorcycle' => 'motorcycle', // אופנוע
-        'pole' => 'pole', // עמוד
-        'couch' => 'couch', // ספה
-        'bench' => 'bench', // ספסל
+  /// מחזיר תרגום לתגית אובייקט לפי השפה הנוכחית.
+  String _localizedLabel(String tag) {
+    if (!_isHebrew) {
+      return switch (tag) {
+        'crosswalk' => 'crosswalk',
+        'person' => 'person',
+        'car' => 'car',
+        'motorcycle' => 'motorcycle',
+        'pole' => 'pole',
+        'couch' => 'couch',
+        'bench' => 'bench',
 
-      // ברירת מחדל: החזרת התגית המקורית אם אין תרגום מוגדר.
-        _ => tag, // _ = wildcard - כל תגית אחרת
+        _ => tag,
       };
     }
 
-    // אם השפה עברית, מחזירים תרגום עברי לתגיות המוכרות.
-    return switch (tag) { // switch expression בעברית
-      'crosswalk' => 'מעבר חציה', // תרגום לעברית
-      'person' => 'אדם', // תרגום לעברית
-      'car' => 'מכונית', // תרגום לעברית
-      'motorcycle' => 'אופנוע', // תרגום לעברית
-      'pole' => 'עמוד', // תרגום לעברית
-      'couch' => 'ספה', // תרגום לעברית
-      'bench' => 'ספסל', // תרגום לעברית
+    return switch (tag) {
+      'crosswalk' => 'מעבר חציה',
+      'person' => 'אדם',
+      'car' => 'מכונית',
+      'motorcycle' => 'אופנוע',
+      'pole' => 'עמוד',
+      'couch' => 'ספה',
+      'bench' => 'ספסל',
 
-    // אם התגית לא מוכרת, מחזירים אותה כמו שהיא.
-      _ => tag, // ברירת מחדל - מחזיר את התגית המקורית
+      _ => tag,
     };
   }
 
-  /// טקסט חומרה לפי ציון הסיכון.
-  ///
-  /// הפונקציה ממירה ציון מספרי לטקסט קצר וברור למשתמש.
-  /// כך המשתמש לא שומע מספרים, אלא משפט טבעי.
-  String _severityText(double riskScore) { // פונקציה פרטית שמחזירה טקסט חומרה
-    // טקסט חומרה בעברית.
-    if (_isHebrew) { // אם השפה עברית
-      // ציון גבוה מאוד: האובייקט קרוב או מסוכן במיוחד.
-      if (riskScore >= 75) return 'קרוב מאוד'; // ציון 75 ומעלה = קרוב מאוד
+  /// מחזיר טקסט חומרה לפי רמת הסיכון.
+  String _severityText(double riskScore) {
+    if (_isHebrew) {
+      if (riskScore >= 75) return 'קרוב מאוד';
 
-      // ציון בינוני-גבוה: האובייקט משמעותי ונמצא לפני המשתמש.
-      if (riskScore >= 50) return 'לפניך'; // ציון 50-74 = לפניך
+      if (riskScore >= 50) return 'לפניך';
 
-      // ציון נמוך יותר: האובייקט קיים בסביבה אך פחות דחוף.
-      return 'בסביבה'; // ציון מתחת ל-50 = בסביבה
+      return 'בסביבה';
     }
 
-    // טקסט חומרה באנגלית לפי אותם ספים.
-    if (riskScore >= 75) return 'very close'; // ציון 75 ומעלה
-    if (riskScore >= 50) return 'ahead'; // ציון 50-74
-    return 'around'; // ציון מתחת ל-50
+    if (riskScore >= 75) return 'very close';
+    if (riskScore >= 50) return 'ahead';
+    return 'around';
   }
 
-  /// הדפסת הודעות Debug רק בזמן פיתוח.
-  ///
-  /// בגרסת Production הפונקציה לא מדפיסה כלום,
-  /// כדי לא להעמיס לוגים ולא לחשוף מידע מיותר.
-  void _debug(String msg) { // פונקציה פרטית להדפסת debug
-    // kDebugMode הוא true רק כאשר האפליקציה רצה במצב פיתוח.
-    if (!kDebugMode) return; // אם לא במצב debug - יציאה
+  /// מדפיס לוגים במצב פיתוח בלבד.
+  void _debug(String msg) {
+    if (!kDebugMode) return;
 
-    // יצירת מחרוזת שעה נוחה לקריאה מתוך הזמן הנוכחי.
-    // לדוגמה: 08:15:32
-    final time = DateTime.now() // קבלת הזמן הנוכחי
-        .toIso8601String() // המרה לפורמט ISO 8601 (למשל: 2024-01-15T14:30:45.123)
-        .split('T') // פיצול לפי T - מפריד בין תאריך לשעה
-        .last // לקיחת החלק האחרון (השעה)
-        .split('.') // פיצול לפי נקודה - מפריד בין שעה למילישניות
-        .first; // לקיחת החלק הראשון (שעה ללא מילישניות)
+    final time = DateTime.now()
+        .toIso8601String()
+        .split('T')
+        .last
+        .split('.')
+        .first;
 
-    // הדפסת הודעת Debug מסודרת עם שם השירות, שעה ותוכן ההודעה.
-    debugPrint('[AlertService][$time] $msg'); // הדפסה בפורמט: [שם השירות][שעה] הודעה
+    debugPrint('[AlertService][$time] $msg');
   }
 }

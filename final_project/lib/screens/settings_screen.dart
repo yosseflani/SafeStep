@@ -1,711 +1,568 @@
-import 'package:flutter/material.dart'; // ייבוא ספריית Material של Flutter (כוללת את כל רכיבי ה-UI כמו Scaffold, Widget וכו')
+import 'dart:ui';
+import 'package:flutter/material.dart';
+import '../utils/app_colors.dart';
 
-const primaryColor = Color(0xFFFF7A00); // קבוע גלובלי של צבע ראשי (כתום). 0xFF = שקיפות מלאה, FF7A00 = הצבע
-
-/// מסך הגדרות לאפליקציית Safe Step
-/// מאפשר שליטה בשפה, קול, מהירות דיבור ורטט
-class SettingsScreen extends StatefulWidget { // הגדרת מסך שהוא Stateful (כלומר משתנה בזמן ריצה)
-
-  final List<Map<String, dynamic>> voices; // רשימת קולות (voices), כל קול הוא Map עם נתונים כמו name ו-locale
-
-  final double speechRate; // מהירות דיבור התחלתית (למשל 0.5 עד 1.0)
-
-  final bool vibrationEnabled; // האם רטט מופעל או לא (true/false)
-
-  final String language; // השפה הנוכחית (למשל "he-IL" או "en-US")
-
-  final String? selectedVoice; // הקול שנבחר (יכול להיות null אם לא נבחר)
-
+class SettingsScreen extends StatefulWidget {
+  final List<Map<String, dynamic>> voices;
+  final double speechRate;
+  final bool vibrationEnabled;
+  final String language;
+  final String? selectedVoice;
   final Future<void> Function()? onVoiceTest;
-  // פונקציה אופציונלית לבדיקת קול
-  // היא async (מחזירה Future) ולא מקבלת פרמטרים
-
   final Function(double, bool, String, String?) onChanged;
-  // פונקציה שמופעלת בכל שינוי בהגדרות
-  // מקבלת: מהירות, רטט, שפה, קול
 
-  const SettingsScreen({ // קונסטרקטור של המחלקה (יוצר את המסך)
-    super.key, // העברת key ל-Widget האב (לניהול זיהוי ה-widget בעץ)
-
-    required this.speechRate, // חובה לשלוח מהירות דיבור
-    required this.vibrationEnabled, // חובה לשלוח מצב רטט
-    required this.language, // חובה לשלוח שפה
-    required this.voices, // חובה לשלוח רשימת קולות
-    required this.selectedVoice, // חובה לשלוח קול נבחר (גם אם null)
-    required this.onChanged, // חובה לשלוח פונקציה לטיפול בשינויים
-
-    this.onVoiceTest, // לא חובה – ייתכן שלא תהיה פונקציה לבדיקה
+  const SettingsScreen({
+    super.key,
+    required this.speechRate,
+    required this.vibrationEnabled,
+    required this.language,
+    required this.voices,
+    required this.selectedVoice,
+    required this.onChanged,
+    this.onVoiceTest,
   });
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
-// Flutter קורא לפונקציה הזו כדי ליצור את ה-State של המסך
-// כלומר כאן מתחיל החלק הדינמי של הקומפוננטה
 }
+
 class _SettingsScreenState extends State<SettingsScreen> {
-  // מחלקת ה-State של המסך (מה שמשתנה בזמן ריצה)
+  // ערכי ההגדרות המקומיים של המסך.
+  late double rate;
+  late bool vibration;
+  late String lang;
 
-  late double rate; // מהירות דיבור מקומית (תאותחל בהמשך)
+  bool get _isHebrew => lang.startsWith('he');
 
-  late bool vibration; // מצב רטט מקומי
+  // מחזיר את שם השפה להצגה.
+  String get _languageTitle => _isHebrew ? 'עברית' : 'English';
 
-  late String lang; // שפה נוכחית
-
-  String? voice; // קול נבחר (יכול להיות null)
-
-  List<Map<String, dynamic>> filteredVoices = [];
-  // רשימת קולות אחרי סינון לפי שפה
-
-  bool _isTestingVoice = false;
-  // האם כרגע מתבצעת בדיקת קול
+  // מחזיר תיאור מילולי למהירות הדיבור.
+  String get _speechRateLabel {
+    if (_isHebrew) {
+      if (rate < 0.7) return 'איטית';
+      if (rate < 1.2) return 'רגילה';
+      return 'מהירה';
+    }
+    if (rate < 0.7) return 'Slow';
+    if (rate < 1.2) return 'Normal';
+    return 'Fast';
+  }
 
   @override
   void initState() {
-    super.initState(); // קריאה ל-initState של האב (חובה)
+    super.initState();
 
+    // טעינת ההגדרות שהתקבלו מהמסך הראשי.
     rate = widget.speechRate.clamp(0.1, 2.0);
-    // לוקח מהירות מה-widget ומגביל בין 0.3 ל-1.0
-
     vibration = widget.vibrationEnabled;
-    // מעתיק מצב רטט
-
     lang = widget.language;
-    // מעתיק שפה
-
-    voice = widget.selectedVoice;
-    // מעתיק קול נבחר
-
-    _filterVoices();
-    // מסנן קולות לפי השפה
   }
 
-  /// מסנן קולות לפי השפה
-  void _filterVoices() {
-    filteredVoices = widget.voices.where((v) {
-      // עובר על כל הקולות
-
-      final locale = (v['locale'] ?? '').toString().toLowerCase();
-      // לוקח locale ומוודא שהוא string קטן
-
-      return locale.startsWith(lang.split('-')[0].toLowerCase());
-      // שומר רק קולות שמתאימים לשפה (למשל "he")
-    }).toList();
-    // הופך לרשימה חדשה
-
-    // אם הקול שנבחר כבר לא קיים – מאפסים
-    if (voice != null && !filteredVoices.any((v) => v['name'] == voice)) {
-      voice = null;
-    }
+  // מודיע למסך הראשי על שינוי בהגדרות.
+  void _notifyChanged() {
+    widget.onChanged(rate, vibration, lang, null);
   }
-
-
-  /// מציג שם קול בצורה קריאה
-  String _getVoiceName(Map<String, dynamic> v) {
-    // פונקציה שמקבלת קול אחד (Map) ומחזירה שם יפה לתצוגה
-
-    final locale = (v['locale'] ?? '').toString();
-    // לוקח את ה-locale (למשל "en-US"), ואם אין → מחרוזת ריקה
-
-    final name = (v['name'] ?? '').toString();
-    // לוקח את שם הקול (למשל "female_1"), ואם אין → ריק
-
-    return "$locale ($name)";
-    // מחזיר טקסט בפורמט: en-US (female_1)
-  }
-
-  String get _languageTitle => lang.startsWith('he') ? 'עברית' : 'English';
-// getter שמחזיר שם שפה לתצוגה
-// אם השפה מתחילה ב-he → עברית, אחרת → English
-
-  bool get _isHebrew => lang.startsWith('he');
-// getter שמחזיר true אם השפה היא עברית
-// שימושי לשינוי טקסטים ב-UI
 
   @override
   Widget build(BuildContext context) {
-    // הפונקציה שבונה את ה-UI של המסך
-
-    return Scaffold(
-      // Scaffold הוא המבנה הראשי של המסך (AppBar, body וכו')
-
-      backgroundColor: const Color(0xFF0F1115),
-      // צבע הרקע הכללי של המסך
-
-      appBar: AppBar(
-        // הפס העליון של המסך
-
-        backgroundColor: const Color(0xFF0F1115),
-        // צבע רקע של ה-AppBar
-
-        elevation: 0,
-        // מבטל צל מתחת ל-AppBar
-
-        scrolledUnderElevation: 0,
-        // מבטל שינוי elevation בגלילה
-
-        title: Text(
-          _isHebrew ? 'הגדרות' : 'Settings',
-          // כותרת לפי השפה הנבחרת
-
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          // עיצוב הטקסט: לבן ובולט
-        ),
-
-        iconTheme: const IconThemeData(color: Colors.white),
-        // צבע האייקונים ב-AppBar (לבן)
-      ),
-
-      body: ListView(
-        // אזור התוכן הראשי, עם גלילה אנכית
-
-        padding: const EdgeInsets.all(20),
-        // רווח פנימי של 20 מכל הצדדים
-
-        children: [
-          // כל הווידג'טים שיופיעו בתוך הרשימה
-
-          const SizedBox(height: 18),
-          // רווח אנכי של 18 פיקסלים
-
-          // שפה
-          _buildGlassSection(
-            // בונה קופסה מעוצבת של ההגדרה
-
-            title: _isHebrew ? 'שפה' : 'Language',
-            // כותרת הסקשן לפי השפה
-
-            icon: Icons.language_rounded,
-            // אייקון של שפה
-
-            child: DropdownButtonFormField<String>(
-              // תיבת בחירה של שפה
-
-              value: lang,
-              // הערך הנבחר כרגע
-
-              dropdownColor: const Color(0xFF1A1F27),
-              // צבע הרקע של הרשימה שנפתחת
-
-              style: const TextStyle(color: Colors.white),
-              // צבע הטקסט בתוך ה-Dropdown
-
-              decoration: _inputDecoration(),
-              // עיצוב השדה (גבול, צבע רקע וכו')
-
-              items: const [
-                DropdownMenuItem(value: "he-IL", child: Text("עברית 🇮🇱")),
-                // אפשרות לעברית
-
-                DropdownMenuItem(value: "en-US", child: Text("English 🇺🇸")),
-                // אפשרות לאנגלית
+    return Directionality(
+      textDirection: _isHebrew ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(
+        backgroundColor: backgroundColor,
+        body: Container(
+          // רקע הדרגתי למסך ההגדרות.
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Color(0xFFFAFAF6),
+                Color(0xFFF1F6F2),
               ],
-
-              onChanged: (value) {
-                // מה קורה כשהמשתמש בוחר שפה חדשה
-
-                if (value != null) {
-                  // מוודא שהערך לא null
-
-                  setState(() {
-                    lang = value;
-                    // מעדכן את השפה המקומית
-
-                    _filterVoices();
-                    // מסנן מחדש את הקולות לפי השפה החדשה
-                  });
-
-                  widget.onChanged(rate, vibration, lang, voice);
-                  // שולח את ההגדרות המעודכנות החוצה
-                }
-              },
             ),
           ),
-
-          const SizedBox(height: 16),
-// רווח בין סקשנים
-
-// קול
-          _buildGlassSection(
-            // סקשן מעוצב של בחירת קול
-
-            title: _isHebrew ? 'קול' : 'Voice',
-            // כותרת לפי השפה
-
-            icon: Icons.record_voice_over_rounded,
-            // אייקון של קול
-
-            child: Column(
-              // עמודה שמכילה כמה רכיבים
-
-              children: [
-                DropdownButtonFormField<String>(
-                  // תיבת בחירה של קול
-
-                  value: voice,
-                  // הקול שנבחר כרגע
-
-                  dropdownColor: const Color(0xFF1A1F27),
-                  // צבע הרשימה
-
-                  style: const TextStyle(color: Colors.white),
-                  // צבע טקסט
-
-                  decoration: _inputDecoration(),
-                  // עיצוב השדה
-
-                  hint: Text(
-                    filteredVoices.isEmpty
-                        ? (_isHebrew ? 'אין קולות זמינים' : 'No voices available')
-                        : (_isHebrew ? 'בחר קול' : 'Select voice'),
-                    // טקסט שמופיע אם אין ערך או אין קולות
-
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-
-                  items: filteredVoices.map<DropdownMenuItem<String>>((v) {
-                    // עובר על כל הקולות המסוננים
-
-                    return DropdownMenuItem<String>(
-                      value: v['name'],
-                      // הערך של הפריט (שם הקול)
-
-                      child: Text(_getVoiceName(v)),
-                      // טקסט יפה לתצוגה (locale + name)
-                    );
-                  }).toList(),
-                  // הופך לרשימה
-
-                  onChanged: filteredVoices.isEmpty
-                      ? null
-                  // אם אין קולות → מבטל את הבחירה
-
-                      : (value) {
-                    if (value != null) {
-                      setState(() => voice = value);
-                      // מעדכן את הקול שנבחר
-
-                      widget.onChanged(rate, vibration, lang, voice);
-                      // שולח את השינוי החוצה
-                    }
-                  },
-                ),
-
-                const SizedBox(height: 14),
-                // רווח
-
-                SizedBox(
-                  width: double.infinity,
-                  // הכפתור יתפרס על כל הרוחב
-
-                  child: OutlinedButton.icon(
-                    // כפתור עם אייקון
-
-                    onPressed: _isTestingVoice || widget.onVoiceTest == null
-                        ? null
-                    // מבטל כפתור אם:
-                    // 1. כבר מנגן
-                    // 2. אין פונקציה
-
-                        : () async {
-                      setState(() => _isTestingVoice = true);
-                      // מתחיל מצב טעינה
-
-                      try {
-                        await widget.onVoiceTest!();
-                        // מפעיל בדיקת קול (async)
-                      } catch (e) {
-                        // אם יש שגיאה
-
-                        if (mounted) {
-                          // בודק שהמסך עדיין קיים
-
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                _isHebrew
-                                    ? 'שגיאה בבדיקת קול: $e'
-                                    : 'Voice test error: $e',
-                              ),
-                              // הודעת שגיאה
-
-                              backgroundColor: Colors.red.shade900,
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 22),
+              child: Column(
+                children: [
+                  _buildHeader(),
+                  const SizedBox(height: 26),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          _buildSettingTile(
+                            icon: Icons.language_rounded,
+                            title: _isHebrew ? 'שפה' : 'Language',
+                            subtitle: _languageTitle,
+                            onTap: _showLanguageSheet,
+                          ),
+                          const SizedBox(height: 20),
+                          _buildSettingTile(
+                            icon: Icons.speed_rounded,
+                            title: _isHebrew ? 'מהירות דיבור' : 'Speech rate',
+                            subtitle: _speechRateLabel,
+                            onTap: _showSpeechRateSheet,
+                          ),
+                          const SizedBox(height: 20),
+                          _buildSettingTile(
+                            icon: Icons.vibration_rounded,
+                            title: _isHebrew ? 'רטט' : 'Vibration',
+                            subtitle: vibration
+                                ? (_isHebrew ? 'פעיל' : 'Enabled')
+                                : (_isHebrew ? 'כבוי' : 'Disabled'),
+                            trailing: Switch(
+                              value: vibration,
+                              activeThumbColor: Colors.white,
+                              activeTrackColor: primaryColor,
+                              inactiveThumbColor: Colors.white,
+                              inactiveTrackColor: const Color(0xFFCBD5E1),
+                              onChanged: (value) {
+                                setState(() => vibration = value);
+                                _notifyChanged();
+                              },
                             ),
-                          );
-                        }
-                      } finally {
-                        if (mounted) setState(() => _isTestingVoice = false);
-                        // מסיים טעינה
-                      }
-                    },
-
-                    icon: _isTestingVoice
-                        ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        // מציג loader בזמן ניגון
-
-                        strokeWidth: 2,
-                        color: primaryColor,
-                      ),
-                    )
-                        : const Icon(Icons.volume_up_rounded),
-                    // אם לא מנגן → אייקון רגיל
-
-                    label: Text(
-                      _isTestingVoice
-                          ? (_isHebrew ? 'מנגן...' : 'Playing...')
-                          : (_isHebrew ? 'בדיקת קול' : 'Voice test'),
-                      // טקסט משתנה לפי מצב
-                    ),
-
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: primaryColor,
-                      // צבע טקסט ואייקון
-
-                      side: BorderSide(color: primaryColor.withOpacity(0.7)),
-                      // גבול
-
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      // גובה הכפתור
-
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        // פינות מעוגלות
+                            onTap: () {
+                              setState(() => vibration = !vibration);
+                              _notifyChanged();
+                            },
+                          ),
+                          const SizedBox(height: 26),
+                          _buildResetButton(),
+                          const SizedBox(height: 4),
+                        ],
                       ),
                     ),
-                  ),
-                ),
-
-                if (filteredVoices.isEmpty) ...[
-                  // אם אין קולות → מציג הודעה
-
-                  const SizedBox(height: 10),
-
-                  Text(
-                    _isHebrew
-                        ? '💡 טיפ: התקן חבילת שפה במכשיר להוספת קולות'
-                        : '💡 Tip: Install a language pack on your device to add voices',
-
-                    style: const TextStyle(fontSize: 12, color: Colors.white54),
-                    textAlign: TextAlign.center,
                   ),
                 ],
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-// רווח לסקשן הבא
-
-          // מהירות דיבור
-          _buildGlassSection(
-            // סקשן מעוצב של מהירות דיבור
-
-            title: _isHebrew ? 'מהירות דיבור' : 'Speech Rate',
-            // כותרת לפי השפה
-
-            icon: Icons.speed_rounded,
-            // אייקון של מהירות
-
-            child: Column(
-              // עמודה שמכילה את ה-Slider והטקסט
-
-              crossAxisAlignment: CrossAxisAlignment.start,
-              // מיישר את הילדים להתחלה (שמאל/ימין לפי הכיוון)
-
-              children: [
-                SliderTheme(
-                  // עיצוב מותאם ל-Slider
-
-                  data: SliderTheme.of(context).copyWith(
-                    // לוקח את העיצוב הקיים ומשנה חלקים ממנו
-
-                    activeTrackColor: primaryColor,
-                    // צבע החלק הפעיל של הפס
-
-                    inactiveTrackColor: Colors.white24,
-                    // צבע החלק הלא פעיל
-
-                    thumbColor: primaryColor,
-                    // צבע העיגול של ה-Slider
-
-                    overlayColor: primaryColor.withOpacity(0.15),
-                    // צבע ה"הילה" מסביב בזמן נגיעה
-
-                    valueIndicatorColor: primaryColor,
-                    // צבע בועת הערך
-                  ),
-
-                  child: Slider(
-                    // רכיב הזזה לבחירת מהירות
-
-                    value: rate,
-                    // הערך הנוכחי
-
-                    min: 0.1,
-                    // ערך מינימלי
-
-                    max: 2,
-                    // ערך מקסימלי
-
-                    divisions: 7,
-                    // מחלק את הטווח ל-7 חלקים
-
-                    label: rate.toStringAsFixed(1),
-                    // טקסט הערך עם ספרה אחת אחרי הנקודה
-
-                    onChanged: (v) => setState(() => rate = v),
-                    // בזמן גרירה מעדכן את rate ומרענן UI
-
-                    onChangeEnd: (v) =>
-                        widget.onChanged(rate, vibration, lang, voice),
-                    // כשהמשתמש מסיים לגרור, שולח את הערכים החוצה
-                  ),
-                ),
-
-                Text(
-                  _isHebrew
-                      ? 'מהירות נוכחית: ${rate.toStringAsFixed(1)}'
-                      : 'Current speed: ${rate.toStringAsFixed(1)}',
-                  // מציג את הערך הנוכחי לפי השפה
-
-                  style: const TextStyle(fontSize: 14, color: Colors.white70),
-                  // עיצוב הטקסט
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-// רווח בין הסקשנים
-
-// רטט
-          _buildGlassSection(
-            // סקשן מעוצב של רטט
-
-            title: _isHebrew ? 'רטט' : 'Vibration',
-            // כותרת לפי השפה
-
-            icon: Icons.vibration_rounded,
-            // אייקון של רטט
-
-            child: SwitchListTile(
-              // שורת הגדרה עם מתג
-
-              contentPadding: EdgeInsets.zero,
-              // מבטל רווח פנימי ברירת מחדל
-
-              title: Text(
-                vibration
-                    ? (_isHebrew ? 'רטט פעיל' : 'Vibration enabled')
-                    : (_isHebrew ? 'רטט כבוי' : 'Vibration disabled'),
-                // טקסט משתנה לפי מצב הרטט והשפה
-
-                style: const TextStyle(fontSize: 16, color: Colors.white),
-                // עיצוב הטקסט
               ),
-
-              value: vibration,
-              // האם המתג דלוק או כבוי
-
-              activeColor: primaryColor,
-              // צבע המתג כשהוא פעיל
-
-              onChanged: (v) {
-                setState(() => vibration = v);
-                // מעדכן את מצב הרטט במסך
-
-                widget.onChanged(rate, vibration, lang, voice);
-                // שולח את הערכים המעודכנים החוצה
-              },
             ),
           ),
-
-          const SizedBox(height: 24),
-// רווח גדול יותר לפני החלק הבא
-
-          // איפוס להגדרות ברירת מחדל
-          Center(
-            // ממרכז את הכפתור
-
-            child: TextButton.icon(
-              // כפתור טקסט עם אייקון
-
-              onPressed: () {
-                // מה קורה כשלוחצים על הכפתור
-
-                setState(() {
-                  rate = 0.5;
-                  // מחזיר את מהירות הדיבור לברירת מחדל
-
-                  vibration = true;
-                  // מפעיל רטט כברירת מחדל
-
-                  lang = 'he-IL';
-                  // מחזיר שפה לעברית
-
-                  voice = null;
-                  // מאפס קול נבחר
-
-                  _filterVoices();
-                  // מסנן מחדש קולות לפי השפה החדשה
-                });
-
-                widget.onChanged(0.5, true, 'he-IL', null);
-                // שולח החוצה את ערכי ברירת המחדל
-              },
-
-              icon: const Icon(Icons.refresh_rounded, size: 18),
-              // אייקון של רענון/איפוס
-
-              label: Text(
-                _isHebrew ? 'איפוס להגדרות ברירת מחדל' : 'Reset to defaults',
-                // טקסט הכפתור לפי השפה
-
-                style: const TextStyle(fontSize: 13),
-                // גודל טקסט
-              ),
-
-              style: TextButton.styleFrom(foregroundColor: Colors.grey),
-              // צבע הכפתור
-            ),
-          ),
-        ],
-// סוף רשימת ה-children של ה-ListView
-
+        ),
       ),
-      // סוף ה-ListView
-
     );
-    // סוף ה-Scaffold
   }
-  // סוף build()
 
-  Widget _buildGlassSection({
-    // פונקציית עזר שבונה סקשן מעוצב קבוע
-
-    required String title,
-    // כותרת הסקשן
-
-    required IconData icon,
-    // אייקון הסקשן
-
-    required Widget child,
-    // התוכן הפנימי של הסקשן
-  }) {
-    return Container(
-      // קונטיינר מעוצב שמחזיק את כל הסקשן
-
-      padding: const EdgeInsets.all(18),
-      // רווח פנימי מכל הצדדים
-
-      decoration: BoxDecoration(
-        // עיצוב הרקע והמסגרת
-
-        color: const Color(0xFF171B22),
-        // צבע רקע של הסקשן
-
-        borderRadius: BorderRadius.circular(24),
-        // פינות מעוגלות
-
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-        // מסגרת עדינה
-
-        boxShadow: [
-          // צל של הקופסה
-
-          BoxShadow(
-            color: Colors.black.withOpacity(0.22),
-            // צבע הצל
-
-            blurRadius: 16,
-            // רמת הטשטוש של הצל
-
-            offset: const Offset(0, 8),
-            // מיקום הצל: למטה
+  // כותרת המסך.
+  Widget _buildHeader() {
+    return Row(
+      children: [
+        _buildBackButton(),
+        Expanded(
+          child: Center(
+            child: Text(
+              _isHebrew ? 'הגדרות' : 'Settings',
+              style: const TextStyle(
+                color: primaryColor,
+                fontSize: 34,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.4,
+              ),
+            ),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 66, height: 66),
+      ],
+    );
+  }
 
-      child: Column(
-        // התוכן בתוך הסקשן מסודר אנכית
-
-        crossAxisAlignment: CrossAxisAlignment.start,
-        // יישור להתחלה
-
-        children: [
-          Row(
-            // שורה של אייקון + כותרת
-
-            children: [
-              Icon(icon, color: primaryColor),
-              // מציג את האייקון בצבע הראשי
-
-              const SizedBox(width: 8),
-              // רווח בין האייקון לטקסט
-
-              Text(
-                title,
-                // כותרת הסקשן
-
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  // עיצוב הכותרת
-                ),
+  // כפתור חזרה למסך הראשי.
+  Widget _buildBackButton() {
+    return Semantics(
+      button: true,
+      label: _isHebrew ? 'חזרה' : 'Back',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => Navigator.of(context).pop(),
+        child: Container(
+          width: 66,
+          height: 66,
+          decoration: BoxDecoration(
+            color: primaryColor,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: const Color(0xFFFFF7E8),
+              width: 1.4,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: primaryColor.withValues(alpha: .35),
+                blurRadius: 22,
+                offset: const Offset(0, 10),
               ),
             ],
           ),
+          child: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: Color(0xFFFFF7E8),
+            size: 28,
+          ),
+        ),
+      ),
+    );
+  }
 
-          const SizedBox(height: 14),
-          // רווח בין הכותרת לתוכן
+  // כרטיס הגדרה כללי.
+  Widget _buildSettingTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    Widget? trailing,
+  }) {
+    return Semantics(
+      button: true,
+      label: '$title, $subtitle',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(34),
+        onTap: onTap,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(34),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(
+                minHeight: 132,
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.84),
+                borderRadius: BorderRadius.circular(34),
+                border: Border.all(
+                  color: primaryColor.withValues(alpha: 0.55),
+                  width: 1.6,
+                ),
+                boxShadow: _tileShadow,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 82,
+                    height: 82,
+                    decoration: BoxDecoration(
+                      color: primaryColor,
+                      borderRadius: BorderRadius.circular(26),
+                      boxShadow: [
+                        BoxShadow(
+                          color: primaryColor.withValues(alpha: 0.30),
+                          blurRadius: 16,
+                          offset: const Offset(0, 7),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Icon(
+                        icon,
+                        color: const Color(0xFFFFF7E8),
+                        size: 42,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 22),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: textColor,
+                            fontSize: 27,
+                            fontWeight: FontWeight.w900,
+                            height: 1.08,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          subtitle,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: subTextColor,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (trailing != null) ...[
+                    const SizedBox(width: 10),
+                    trailing,
+                  ] else
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      color: primaryColor,
+                      size: 38,
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
-          child,
-          // כאן נכנס התוכן שנשלח לפונקציה
+  // מאפס את ההגדרות לברירת המחדל.
+  Widget _buildResetButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 78,
+      child: ElevatedButton.icon(
+        onPressed: () {
+          setState(() {
+            rate = 0.5;
+            vibration = true;
+            lang = 'he-IL';
+          });
+          widget.onChanged(0.5, true, 'he-IL', null);
+        },
+        icon: const Icon(Icons.refresh_rounded, size: 26),
+        label: Text(
+          _isHebrew ? 'איפוס הגדרות' : 'Reset settings',
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: primaryColor,
+          foregroundColor: const Color(0xFFFFF7E8),
+          elevation: 0,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        ),
+      ),
+    );
+  }
+
+  // מציג בחירת שפה.
+  void _showLanguageSheet() {
+    _showSafeStepSheet(
+      title: _isHebrew ? 'בחר שפה' : 'Choose language',
+      child: Column(
+        children: [
+          _buildSheetOption(
+            title: 'עברית',
+            subtitle: 'Hebrew',
+            selected: lang == 'he-IL',
+            onTap: () {
+              setState(() => lang = 'he-IL');
+              _notifyChanged();
+              Navigator.pop(context);
+            },
+          ),
+          const SizedBox(height: 12),
+          _buildSheetOption(
+            title: 'English',
+            subtitle: 'United States',
+            selected: lang == 'en-US',
+            onTap: () {
+              setState(() => lang = 'en-US');
+              _notifyChanged();
+              Navigator.pop(context);
+            },
+          ),
         ],
       ),
     );
   }
 
-  InputDecoration _inputDecoration() {
-    // פונקציה שמחזירה עיצוב אחיד לשדות קלט (כמו Dropdown)
+  // מציג בחירת מהירות דיבור.
+  void _showSpeechRateSheet() {
+    double tempRate = rate;
 
-    return InputDecoration(
-      // אובייקט שמגדיר איך שדה הקלט נראה
-
-      filled: true,
-      // אומר שהשדה יהיה עם רקע מלא
-
-      fillColor: const Color(0xFF1E242D),
-      // צבע הרקע של השדה
-
-      hintStyle: const TextStyle(color: Colors.white54),
-      // עיצוב טקסט ה-hint (טקסט אפור בהיר)
-
-      enabledBorder: OutlineInputBorder(
-        // גבול השדה כשהוא לא בפוקוס
-
-        borderRadius: BorderRadius.circular(16),
-        // פינות מעוגלות
-
-        borderSide: BorderSide(color: Colors.white.withOpacity(0.05)),
-        // גבול עדין מאוד
+    _showSafeStepSheet(
+      title: _isHebrew ? 'מהירות דיבור' : 'Speech rate',
+      child: StatefulBuilder(
+        builder: (context, setModalState) {
+          return Column(
+            children: [
+              Text(
+                tempRate.toStringAsFixed(1),
+                style: const TextStyle(
+                  color: primaryColor,
+                  fontSize: 42,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 8),
+              SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  activeTrackColor: primaryColor,
+                  inactiveTrackColor: const Color(0xFFD9E5DE),
+                  thumbColor: primaryColor,
+                  overlayColor: primaryColor.withValues(alpha: 0.15),
+                  valueIndicatorColor: primaryColor,
+                  trackHeight: 7,
+                ),
+                child: Slider(
+                  value: tempRate,
+                  min: 0.1,
+                  max: 2.0,
+                  divisions: 7,
+                  label: tempRate.toStringAsFixed(1),
+                  onChanged: (value) {
+                    setModalState(() => tempRate = value);
+                    setState(() => rate = value);
+                  },
+                  onChangeEnd: (_) => _notifyChanged(),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(_isHebrew ? 'איטי' : 'Slow', style: _sheetHintStyle),
+                  Text(_isHebrew ? 'מהיר' : 'Fast', style: _sheetHintStyle),
+                ],
+              ),
+            ],
+          );
+        },
       ),
-
-      focusedBorder: OutlineInputBorder(
-        // גבול כשהשדה בפוקוס (לחוץ/נבחר)
-
-        borderRadius: BorderRadius.circular(16),
-        // אותו עיגול פינות
-
-        borderSide: const BorderSide(color: primaryColor),
-        // גבול בצבע הראשי (כתום)
-      ),
-
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-      // רווח פנימי בתוך השדה (ימין/שמאל + למעלה/למטה)
     );
   }
+
+  // מציג Bottom Sheet אחיד עבור כל ההגדרות.
+  void _showSafeStepSheet({required String title, required Widget child}) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        return Directionality(
+          textDirection: _isHebrew ? TextDirection.rtl : TextDirection.ltr,
+          child: Container(
+            padding: EdgeInsets.only(
+              left: 22,
+              right: 22,
+              top: 12,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 26,
+            ),
+            decoration: const BoxDecoration(
+              color: backgroundColor,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 42,
+                    height: 5,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFD1D5DB),
+                      borderRadius: BorderRadius.all(Radius.circular(999)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: textColor,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                child,
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // אפשרות בודדת בתוך חלון בחירה.
+  Widget _buildSheetOption({
+    required String title,
+    required String subtitle,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(22),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: selected ? primaryColor : borderColor,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: selected ? primaryColor : const Color(0xFFF1F5F9),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                selected ? Icons.check_rounded : Icons.circle_outlined,
+                color: selected ? Colors.white : subTextColor,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: textColor,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: subTextColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // הצללה אחידה עבור כרטיסי ההגדרות.
+  List<BoxShadow> get _tileShadow => [
+    BoxShadow(
+      color: primaryColor.withValues(alpha: 0.08),
+      blurRadius: 28,
+      offset: const Offset(0, 14),
+    ),
+    BoxShadow(
+      color: Colors.black.withValues(alpha: 0.045),
+      blurRadius: 14,
+      offset: const Offset(0, 6),
+    ),
+  ];
+
+  // סגנון טקסט אחיד להערות בחלונות הבחירה.
+  TextStyle get _sheetHintStyle => const TextStyle(
+    color: subTextColor,
+    fontSize: 14,
+    fontWeight: FontWeight.w700,
+  );
 }

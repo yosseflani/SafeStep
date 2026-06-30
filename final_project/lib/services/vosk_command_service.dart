@@ -1,173 +1,146 @@
-import 'dart:async'; // ייבוא ספריית async של Dart - מספקת Stream, StreamSubscription, Future וכו'
+import 'dart:async';
+import 'dart:convert';
 
-import 'dart:convert'; // ייבוא ספריית json של Dart - מספקת jsonDecode, jsonEncode וכו'
-
-import 'package:flutter/foundation.dart'; // ייבוא ספריית foundation של Flutter - כולל kDebugMode, debugPrint
-
-import 'package:vosk_flutter/vosk_flutter.dart'; // ייבוא ספריית Vosk - ספרייה לזיהוי דיבור offline (ללא אינטרנט)
+import 'package:flutter/foundation.dart';
+import 'package:vosk_flutter/vosk_flutter.dart';
 
 /// שירות לזיהוי פקודות קוליות באמצעות Vosk.
-/// מחלקה שמנהלת את כל הלוגיקה של זיהוי דיבור והמרה לפקודות
 class VoskCommandService {
-  /// קצב דגימת האודיו הנדרש למודל.
-  static const int _sampleRate = 16000; // קצב דגימה של 16kHz - סטנדרטי לזיהוי דיבור
+  // קצב הדגימה הנדרש למודל הזיהוי.
+  static const int _sampleRate = 16000;
 
-  /// נתיב מודל הזיהוי מתוך תיקיית assets.
-  static const String _modelAssetPath = // נתיב לקובץ המודל הדחוס
-      'assets/models/vosk-model-small-en-us-0.15.zip'; // מודל אנגלית קטן (15MB) - מתאים למכשירים ניידים
+  // נתיב מודל Vosk מתוך תיקיית assets.
+  static const String _modelAssetPath =
+      'assets/models/vosk-model-small-en-us-0.15.zip';
 
-  /// מופע הפלאגין הראשי של Vosk.
-  final VoskFlutterPlugin _vosk = VoskFlutterPlugin.instance(); // singleton - מופע יחיד של הפלאגין
+  // מופעי Vosk לניהול המודל והזיהוי הקולי.
+  final VoskFlutterPlugin _vosk = VoskFlutterPlugin.instance();
+  final ModelLoader _modelLoader = ModelLoader();
 
-  /// אחראי על טעינת המודל מתוך assets.
-  final ModelLoader _modelLoader = ModelLoader(); // מחלקה שטוענת קבצים מ-assets לנתיב זמין במכשיר
+  Model? _model;
+  Recognizer? _recognizer;
+  SpeechService? _speechService;
 
-  Model? _model; // מודל Vosk שנטען - nullable כי מתחיל כ-null
-  Recognizer? _recognizer; // מזהה דיבור שמשתמש במודל - nullable
-  SpeechService? _speechService; // שירות שמקליט מהמיקרופון ומזהה דיבור - nullable
+  // מנוי לתוצאות הזיהוי מה־Stream.
+  StreamSubscription<String>? _resultSubscription;
 
-  /// מנוי לתוצאות הזיהוי מהשירות.
-  StreamSubscription<String>? _resultSubscription; // מנוי ל-stream של תוצאות זיהוי - מאפשר לבטל האזנה
+  bool _isInitialized = false;
+  bool _isListening = false;
 
-  bool _isInitialized = false; // דגל שמציין אם השירות אותחל בהצלחה
-  bool _isListening = false; // דגל שמציין אם מתבצעת האזנה כעת
+  bool get isInitialized => _isInitialized;
+  bool get isListening => _isListening;
 
-  /// מציין האם השירות אותחל בהצלחה.
-  bool get isInitialized => _isInitialized; // getter - מאפשר לקרוא את המשתנה הפרטי מחוץ למחלקה
+  /// טוען את מודל Vosk ומכין את שירות הזיהוי.
+  Future<bool> initialize() async {
+    _debug('initialize()');
 
-  /// מציין האם מתבצעת האזנה כעת.
-  bool get isListening => _isListening; // getter - מאפשר לבדוק אם המיקרופון פעיל
+    try {
+      final modelPath = await _modelLoader.loadFromAssets(_modelAssetPath);
 
-  /// טוען את מודל Vosk ומכין את שירות הזיהוי הקולי.
-  /// פונקציה אסינכרונית שטוענת את המודל, יוצרת recognizer ומכינה את שירות הדיבור
-  Future<bool> initialize() async { // מחזיר true אם הצליח, false אם נכשל
-    _debug('initialize()'); // הדפסת הודעת debug
+      _model = await _vosk.createModel(modelPath);
 
-    try { // בלוק try-catch לטיפול בשגיאות
-      final modelPath = await _modelLoader.loadFromAssets(_modelAssetPath); // טעינת המודל מ-assets לנתיב זמני
-      // await - ממתין שהטעינה תסתיים (יכול לקחת כמה שניות)
+      _recognizer = await _vosk.createRecognizer(
+        model: _model!,
+        sampleRate: _sampleRate,
 
-      _model = await _vosk.createModel(modelPath); // יצירת מודל Vosk מהקובץ שנטען
-      // המודל מכיל את רשת הניירונים לזיהוי דיבור
-
-      _recognizer = await _vosk.createRecognizer( // יצירת recognizer שמשתמש במודל
-        model: _model!, // העברת המודל שנוצר (! = force unwrap - אנחנו בטוחים שהוא לא null)
-        sampleRate: _sampleRate, // העברת קצב דגימה
-
-        /// הגבלת הזיהוי לפקודות הרלוונטיות לאפליקציה.
-        grammar: [ // רשימת מילים/פקודות שהמודל יזהה - משפר דיוק ומהירות
-          'start', // התחל
-          'stop', // עצור
-          'help', // עזרה
-          'repeat', // חזור
-          'home', // בית
-          'emergency', // חירום
-          'settings', // הגדרות
-          'yes', // כן
-          'no', // לא
-          'vibration on', // הפעל רטט
-          'vibration off', // כבה רטט
+        // הגבלת הזיהוי לפקודות הרלוונטיות לאפליקציה.
+        grammar: [
+          'start',
+          'stop',
+          'help',
+          'repeat',
+          'home',
+          'emergency',
+          'settings',
+          'yes',
+          'no',
+          'vibration on',
+          'vibration off',
         ],
       );
 
-      _speechService = await _vosk.initSpeechService(_recognizer!); // יצירת שירות דיבור שמקליט מהמיקרופון
-      // השירות לוקח את האודיו מהמיקרופון ומעביר אותו ל-recognizer
+      _speechService = await _vosk.initSpeechService(_recognizer!);
 
-      _isInitialized = true; // עדכון הדגל שהאתחול הצליח
+      _isInitialized = true;
 
-      _debug('Vosk initialized successfully'); // הדפסת הודעת הצלחה
-      return true; // החזרת true - אתחול הצליח
-    } catch (e) { // תפיסת שגיאות - e = השגיאה
-      _debug('initialize error: $e'); // הדפסת פרטי השגיאה
-      return false; // החזרת false - אתחול נכשל
+      _debug('Vosk initialized successfully');
+      return true;
+    } catch (e) {
+      _debug('initialize error: $e');
+      return false;
     }
   }
 
-  /// מתחיל האזנה לפקודות קוליות ומחזיר כל פקודה מזוהה דרך callback.
-  /// מקבל פונקציה שתקרא בכל פעם שזוהית פקודה
-  Future<void> startListening(Function(String command) onCommand) async { // onCommand - callback שנקרא עם הפקודה שזוהתה
-    if (!_isInitialized || _speechService == null) { // בדיקה שהשירות אותחל
-      _debug('Vosk is not initialized'); // הדפסת הודעת שגיאה
-      return; // יציאה מהפונקציה
+  /// מתחיל האזנה לפקודות קוליות.
+  Future<void> startListening(Function(String command) onCommand) async {
+    if (!_isInitialized || _speechService == null) {
+      _debug('Vosk is not initialized');
+      return;
     }
 
-    if (_isListening) { // בדיקה שכבר לא מקשיבים (למנוע האזנה כפולה)
-      _debug('already listening'); // הדפסת הודעה
-      return; // יציאה
+    if (_isListening) {
+      _debug('already listening');
+      return;
     }
 
-    await _resultSubscription?.cancel(); // ביטול מנוי קיים אם יש (? = null-aware operator)
-    // מונע דליפת זיכרון ממנויים ישנים
+    // ביטול מנוי קודם לפני פתיחת האזנה חדשה.
+    await _resultSubscription?.cancel();
 
-    _resultSubscription = _speechService!.onResult().listen((result) { // האזנה ל-stream של תוצאות
-      // onResult() מחזיר Stream שפולט תוצאת זיהוי בכל פעם שיש זיהוי חדש
-      // .listen() - נרשם לקבלת התוצאות
+    _resultSubscription = _speechService!.onResult().listen((result) {
+      final command = _extractCommand(result);
 
-      final command = _extractCommand(result); // חילוץ הטקסט מהתוצאה (JSON)
-
-      if (command.isNotEmpty) { // בדיקה שזוהית פקודה (לא ריקה)
-        onCommand(command); // קריאה ל-callback עם הפקודה שזוהתה
+      if (command.isNotEmpty) {
+        onCommand(command);
       }
     });
 
-    await _speechService!.start(); // התחלת הקלטה מהמיקרופון
-    // await - ממתין שההפעלה תסתיים
+    await _speechService!.start();
 
-    _isListening = true; // עדכון הדגל שמקשיבים
+    _isListening = true;
 
-    _debug('listening started'); // הדפסת הודעה
+    _debug('listening started');
   }
 
   /// עוצר את ההאזנה ומשחרר את מנוי התוצאות.
-  /// חובה לקרוא כשרוצים להפסיק להקשיב לפקודות
   Future<void> stopListening() async {
-    if (!_isListening || _speechService == null) return; // בדיקה שמקשיבים ויש שירות
+    if (!_isListening || _speechService == null) return;
 
-    await _speechService!.stop(); // עצירת ההקלטה מהמיקרופון
+    await _speechService!.stop();
 
-    await _resultSubscription?.cancel(); // ביטול המנוי ל-stream - מפסיק לקבל תוצאות
-    _resultSubscription = null; // איפוס המנוי (מונע דליפת זיכרון)
+    await _resultSubscription?.cancel();
+    _resultSubscription = null;
 
-    _isListening = false; // עדכון הדגל שלא מקשיבים יותר
+    _isListening = false;
 
-    _debug('listening stopped'); // הדפסת הודעה
+    _debug('listening stopped');
   }
 
-  /// ניקוי משאבים בעת סגירת השירות.
-  /// חובה לקרוא כשמסיימים להשתמש בשירות - מונע דליפת זיכרון
+  /// מנקה משאבי האזנה פעילים.
   Future<void> dispose() async {
-    await stopListening(); // עצירת האזנה ושחרור מנויים
+    await stopListening();
   }
 
-  /// חילוץ טקסט הפקודה מתוך תוצאת JSON של Vosk.
-  /// מקבל מחרוזת JSON ומחזיר את הטקסט שזוהה
-  String _extractCommand(String result) { // פונקציה פרטית (מתחיל ב-_)
-    try { // בלוק try-catch לטיפול בשגיאות JSON
-      final json = jsonDecode(result); // המרה ממחרוזת JSON ל-Map/List
-      // jsonDecode - פונקציה מ-dart:convert
+  /// מחלץ את טקסט הפקודה מתוך תוצאת JSON של Vosk.
+  String _extractCommand(String result) {
+    try {
+      final json = jsonDecode(result);
 
-      final text = json['text']; // חילוץ שדה 'text' מה-JSON
-      // Vosk מחזיר JSON כמו: {"text": "start", "confidence": 0.95}
+      final text = json['text'];
 
-      if (text is String) { // בדיקה ש-text הוא אכן מחרוזת
-        return text.trim().toLowerCase(); // החזרת הטקסט נקי: ללא רווחים מיותרים ובאותיות קטנות
-        // trim() - מסיר רווחים בהתחלה ובסוף
-        // toLowerCase() - ממיר לאותיות קטנות (למשל "START" → "start")
+      if (text is String) {
+        return text.trim().toLowerCase();
       }
 
-      return ''; // אם text לא String - החזרת מחרוזת ריקה
-    } catch (_) { // תפיסת שגיאות - _ = מתעלמים מהשגיאה
-      return ''; // אם יש שגיאה ב-JSON - החזרת מחרוזת ריקה
+      return '';
+    } catch (_) {
+      return '';
     }
   }
 
-  /// הדפסת הודעות פיתוח בלבד.
-  /// פונקציה פנימית שמדפיסה רק במצב debug
-  void _debug(String msg) { // פרמטר: הודעה להדפסה
-    if (!kDebugMode) return; // אם לא במצב debug - יציאה מהפונקציה
-    // kDebugMode - משתנה גלובלי מ-Flutter שמציין אם רצים במצב פיתוח
+  /// מדפיס לוגים במצב פיתוח בלבד.
+  void _debug(String msg) {
+    if (!kDebugMode) return;
 
-    debugPrint('[VoskCommandService] $msg'); // הדפסה בפורמט: [שם השירות] הודעה
-    // debugPrint - פונקציה מ-Flutter שמדפיסה לקונסול (בטוחה יותר מ-print)
+    debugPrint('[VoskCommandService] $msg');
   }
 }

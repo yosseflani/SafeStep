@@ -6,6 +6,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:vibration/vibration.dart';
 import 'dart:math';
 import 'dart:async';
+import 'dart:ui';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import '../models/detection.dart';
@@ -15,8 +16,10 @@ import '../services/cooldown_manager.dart';
 import '../services/risk_scoring_service.dart';
 import '../services/yolo_service.dart';
 import '../services/vosk_command_service.dart';
-import 'display_manager.dart';
+import '../services/display_manager.dart';
 import 'settings_screen.dart';
+import '../utils/app_colors.dart';
+import '../widgets/safestep_logo.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -25,11 +28,9 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-const Color primaryColor = Color(0xFFFF7A00);
-
 class _MainScreenState extends State<MainScreen> {
 
-  // ── שירותים ─────────────────────────────────────────────
+  // ── שירותי המערכת המרכזיים ───────────────────────────────
   final CameraService _cameraService = CameraService();
   final YoloService _yoloService = YoloService();
   final RiskScoringService _riskScoringService = RiskScoringService();
@@ -38,10 +39,11 @@ class _MainScreenState extends State<MainScreen> {
   final FlutterTts _tts = FlutterTts();
   final DisplayManager _displayManager = DisplayManager();
   final VoskCommandService _voiceService = VoskCommandService();
-  // ── מניעת עיבוד פריימים כפול ────────────────────────────
+
+  // מונע עיבוד מקביל של כמה פריימים בו־זמנית.
   bool _isProcessingFrame = false;
 
-  // ── לוג מרוכז עם timestamp ───────────────────────────────
+  // לוג פנימי לפיתוח בלבד.
   void _debug(String message, [Object? error, StackTrace? stackTrace]) {
     if (!kDebugMode) return;
     final time = DateTime.now().toIso8601String().split('T').last.split('.').first;
@@ -50,33 +52,34 @@ class _MainScreenState extends State<MainScreen> {
     if (stackTrace != null) debugPrint('[SafeStep][$time][STACK] $stackTrace');
   }
 
-  // ── רטט ─────────────────────────────────────────────────
+  // ── ניהול רטט ────────────────────────────────────────────
   DateTime? _lastVibrationTime;
   static const _vibrationCooldown = Duration(milliseconds: 500);
 
-  // ── אקסלרומטר ────────────────────────────────────────────
-  StreamSubscription? _accelerometerSubscription;
+  // ── זיהוי תנועת משתמש באמצעות אקסלרומטר ─────────────────
+  StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
   static const _movementThreshold = 1.2;
   final List<double> _magnitudeHistory = [];
   static const _historySize = 10;
 
-  // ── מצב מערכת ────────────────────────────────────────────
+  // ── מצב ריצה ואתחול ─────────────────────────────────────
   bool _isInitialized = false;
   bool _isRunning = false;
   bool _userIsMoving = false;
 
-  // ── הגדרות משתמש ─────────────────────────────────────────
+  // ── הגדרות קול והתראה ───────────────────────────────────
   double _speechRate = 0.5;
   bool _vibrationEnabled = true;
   String _language = 'he-IL';
   String? _selectedVoice;
   List<Map<String, dynamic>> _voices = [];
 
+  // האובייקט המסוכן ביותר שמוצג כרגע.
   Detection? _currentMostDangerous;
 
   bool get _isHebrew => _language.startsWith('he');
 
-  // ── ספי התראה ────────────────────────────────────────────
+  // ── ספי התראה לפי רמת סיכון ─────────────────────────────
   // < 30  → שקט
   // 30–40 → רטט בלבד
   // 40–65 → רטט + קול
@@ -99,10 +102,11 @@ class _MainScreenState extends State<MainScreen> {
     try {
       _debug('System initialization started');
 
+      // אתחול מקביל של שירותי הליבה.
       final results = await Future.wait([
         _cameraService.initialize(),
         _yoloService.initModel(),
-        _voiceService.initialize(),           // ← פקודות קוליות
+        _voiceService.initialize(),
         _alertService.initialize(
           language: _language,
           speechRate: _speechRate,
@@ -113,6 +117,7 @@ class _MainScreenState extends State<MainScreen> {
       final bool voiceAvailable = results[2] as bool;
       _debug('Voice recognition available: $voiceAvailable');
 
+      // עדכון רזולוציית התמונה עבור חישוב סיכון מדויק.
       final controller = _cameraService.controller;
       if (controller?.value.previewSize != null) {
         _riskScoringService.updateResolution(
@@ -121,6 +126,7 @@ class _MainScreenState extends State<MainScreen> {
         );
       }
 
+      // טעינת קולות זמינים והחלת הגדרות דיבור.
       final raw = await _tts.getVoices ?? [];
       _voices = raw.whereType<Map<String, dynamic>>().toList();
       await _applyTtsSettings();
@@ -128,8 +134,8 @@ class _MainScreenState extends State<MainScreen> {
       if (!mounted) return;
       setState(() => _isInitialized = true);
 
-      // האזנה לאקסלרומטר – מזהה אם המשתמש הולך
-      _accelerometerSubscription = accelerometerEvents.listen((event) {
+      // מזהה האם המשתמש נמצא בתנועה.
+      _accelerometerSubscription = accelerometerEventStream().listen((event) {
         final magnitude = sqrt(
           event.x * event.x + event.y * event.y + event.z * event.z,
         );
@@ -144,9 +150,9 @@ class _MainScreenState extends State<MainScreen> {
 
       await _resumeListening();
 
-      _debug('✅ Initialization completed');
+      _debug('Initialization completed');
     } catch (e, stack) {
-      _debug('❌ Initialization failed', e, stack);
+      _debug('Initialization failed', e, stack);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -168,9 +174,14 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _applyTtsSettings() async {
     try {
+      // מחיל שפה, מהירות וקול נבחר עבור מנוע הדיבור.
       await _tts.setLanguage(_language);
       await _tts.setSpeechRate(_speechRate.clamp(0.1, 2.0));
-      if (_selectedVoice != null) await _tts.setVoice({'name': _selectedVoice!});
+      if (_selectedVoice != null) {
+        await _tts.setVoice({'name': _selectedVoice!});
+      }
+
+      // מסנכרן את שירות ההתראות עם הגדרות הדיבור.
       await _alertService.updateSettings(
         language: _language,
         speechRate: _speechRate,
@@ -189,7 +200,7 @@ class _MainScreenState extends State<MainScreen> {
     if (!mounted) return;
     if (_voiceService.isListening) return;
 
-    // מחכה שה-TTS יסיים לדבר לפני שמאזין שוב
+    // מונע האזנה בזמן שהמערכת משמיעה התראה.
     while (_alertService.isSpeaking) {
       await Future.delayed(const Duration(milliseconds: 150));
       if (!mounted) return;
@@ -199,14 +210,19 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _handleVoiceCommand(String command) {
-    _debug('🎤 Voice command: "$command"');
+    _debug('Voice command: "$command"');
 
     final text = command.toLowerCase().trim();
 
+    // הפעלת פעולות מערכת לפי פקודות קוליות.
     if (text == 'start') {
-      if (!_isRunning) _startDetection();
+      if (!_isRunning) {
+        _startDetection();
+      }
     } else if (text == 'stop') {
-      if (_isRunning) _stopDetection();
+      if (_isRunning) {
+        _stopDetection();
+      }
     } else if (text == 'settings') {
       _openSettings();
     } else if (text == 'help') {
@@ -234,7 +250,8 @@ class _MainScreenState extends State<MainScreen> {
     await _alertService.speakSystemStarted();
     await Future.delayed(const Duration(milliseconds: 500));
 
-    if (_vibrationEnabled && (await Vibration.hasVibrator() ?? false)) {
+    // רטט קצר לאישור תחילת פעולה.
+    if (_vibrationEnabled && await Vibration.hasVibrator()) {
       await Vibration.vibrate(duration: 100);
     }
 
@@ -245,16 +262,18 @@ class _MainScreenState extends State<MainScreen> {
       _isProcessingFrame = true;
 
       try {
+        // המרת פריים מהמצלמה לקלט עבור מודל הזיהוי.
         final bytesList   = image.planes.map((p) => p.bytes).toList();
         final detections  = await _yoloService.detectObjects(bytesList, image.height, image.width);
 
+        // חישוב סיכון ובחירת האובייקט המשמעותי ביותר.
         _riskScoringService.updateResolution(image.width, image.height);
         final scored = _riskScoringService.scoreDetections(detections);
         final top    = scored.isNotEmpty ? scored.first : null;
 
         if (!mounted) return;
 
-        // עדכון תצוגה חכם (לא כל פריים)
+        // מעדכן תצוגה רק כשיש שינוי משמעותי.
         final shouldUpdate = _displayManager.shouldUpdateDisplay(
           hasCurrentObject: _currentMostDangerous != null,
           newRisk: top?.riskScore,
@@ -264,8 +283,11 @@ class _MainScreenState extends State<MainScreen> {
         if (shouldUpdate) {
           setState(() {
             _currentMostDangerous = top;
-            if (top != null) _displayManager.markDisplayStart();
-            else _displayManager.clearDisplayStart();
+            if (top != null) {
+              _displayManager.markDisplayStart();
+            } else {
+              _displayManager.clearDisplayStart();
+            }
           });
         }
 
@@ -282,12 +304,12 @@ class _MainScreenState extends State<MainScreen> {
           return;
         }
 
-        // עוצרים האזנה לפני שמדברים
+        // עוצר האזנה כדי למנוע זיהוי שגוי של קול המערכת.
         await _voiceService.stopListening();
 
         if (alertLevel == _AlertLevel.beepAndVoice) {
-          SystemSound.play(SystemSoundType.alert); // מפעיל צפצוף מובנה של המכשיר בלי קובץ beep.mp3
-          await Future.delayed(const Duration(milliseconds: 300)); // מחכה קצת לפני הדיבור כדי שהצפצוף לא יתערבב עם ההכרזה
+          SystemSound.play(SystemSoundType.alert);
+          await Future.delayed(const Duration(milliseconds: 300));
         }
 
         final spoken = await _alertService.trySpeakDetection(
@@ -313,6 +335,7 @@ class _MainScreenState extends State<MainScreen> {
   _AlertLevel _getAlertLevel(Detection detection) {
     final score = detection.riskScore;
 
+    // התראה תופעל רק אם יש תנועה יחסית.
     final relativeMotion =
         _userIsMoving || detection.isApproaching;
 
@@ -332,58 +355,26 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _handleVibration(String tag) async {
     if (!_vibrationEnabled) return;
 
+    // מגביל תדירות רטט כדי למנוע עומס על המשתמש.
     final now = DateTime.now();
     if (_lastVibrationTime != null &&
-        now.difference(_lastVibrationTime!) < _vibrationCooldown) return;
+        now.difference(_lastVibrationTime!) < _vibrationCooldown) {
+      return;
+    }
 
     try {
-      if (!(await Vibration.hasVibrator() ?? false)) return;
+      if (!await Vibration.hasVibrator()) {
+        return;
+      }
 
+      // התאמת עוצמת הרטט לסוג האובייקט.
       final duration = switch (tag) {
-
-      // ─────────────────────────────────────────────
-      // SafeStep custom model objects
-      // ─────────────────────────────────────────────
-
-      // סכנה גבוהה מאוד
-        'car' || 'motorcycle' => 400,
-
-      // מכשול דינמי
-        'person' => 250,
-
-      // מכשול סטטי משמעותי
-        'pole' => 350,
-
-      // מכשולים סטטיים
-        'bench' || 'couch' => 300,
-
-      // אובייקט ניווט
-        'crosswalk' => 150,
-
-      /*
-  // ─────────────────────────────────────────────
-  // Old COCO categories - saved for future use
-  // ─────────────────────────────────────────────
-
-  'car' || 'bus' || 'truck' || 'train' || 'motorcycle' => 400,
-
-  'person' || 'bicycle' || 'scooter' || 'skateboard' => 250,
-
-  'traffic light' || 'stop sign' || 'fire hydrant' || 'crosswalk' => 150,
-
-  'dog' || 'cat' || 'horse' || 'sheep' || 'cow' ||
-  'elephant' || 'bear' || 'zebra' || 'giraffe' || 'bird' => 200,
-
-  'bench' || 'chair' || 'couch' || 'bed' ||
-  'dining table' || 'potted plant' => 300,
-
-  'backpack' || 'handbag' || 'suitcase' || 'umbrella' => 180,
-
-  'skis' || 'sports ball' || 'surfboard' ||
-  'tennis racket' => 120,
-  */
-
-        _ => 100,
+        'car' || 'motorcycle'                => 400,
+        'pole'                               => 350,
+        'person'                             => 300,
+        'crosswalk'                          => 250,
+        'bench' || 'couch'                   => 200,
+        _                                                                   => 100,
       };
 
       await Vibration.vibrate(duration: duration);
@@ -402,11 +393,12 @@ class _MainScreenState extends State<MainScreen> {
 
     setState(() => _isRunning = false);
 
+    // ניקוי מצב מערכת לאחר עצירת הזיהוי.
     await _cameraService.stopStream();
     await _voiceService.stopListening();
     _alertService.resetSpeakingState();
     _riskScoringService.reset();
-    _cooldownManager.clear();          // ← איפוס cooldowns בעצירה
+    _cooldownManager.clear();
     _displayManager.clearDisplayStart();
 
     setState(() => _currentMostDangerous = null);
@@ -435,6 +427,7 @@ class _MainScreenState extends State<MainScreen> {
             await _alertService.speakVoiceTest();
           },
           onChanged: (speechRate, vibrationEnabled, language, selectedVoice) async {
+            // שמירת הגדרות המשתמש ועדכון שירותי הדיבור.
             _speechRate       = speechRate;
             _vibrationEnabled = vibrationEnabled;
             _language         = language;
@@ -447,34 +440,6 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  // ════════════════════════════════════════════════════════
-  // HELPERS
-  // ════════════════════════════════════════════════════════
-
-  String _localizedObjectName() {
-    if (_currentMostDangerous == null) {
-      return _isHebrew ? 'אין אובייקט מסוכן כרגע' : 'No dangerous object detected';
-    }
-    return _alertService.localizedLabel(_currentMostDangerous!.tag);
-  }
-
-  String _localizedRiskLevel(double score) {
-    if (_isHebrew) {
-      if (score >= 75) return 'גבוהה';
-      if (score >= 50) return 'בינונית';
-      return 'נמוכה';
-    }
-    if (score >= 75) return 'High';
-    if (score >= 50) return 'Medium';
-    return 'Low';
-  }
-
-  Color _riskColor(double? score) {
-    if (score == null)  return Colors.grey;
-    if (score >= 75)    return const Color(0xFFFF5A5F);
-    if (score >= 50)    return const Color(0xFFFFA726);
-    return const Color(0xFF66BB6A);
-  }
 
   // ════════════════════════════════════════════════════════
   // DISPOSE
@@ -482,6 +447,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    // שחרור משאבים והפסקת שירותים פעילים.
     _accelerometerSubscription?.cancel();
     _cameraService.dispose();
     _yoloService.dispose();
@@ -491,6 +457,7 @@ class _MainScreenState extends State<MainScreen> {
     super.dispose();
   }
 
+
   // ════════════════════════════════════════════════════════
   // BUILD
   // ════════════════════════════════════════════════════════
@@ -499,16 +466,22 @@ class _MainScreenState extends State<MainScreen> {
   Widget build(BuildContext context) {
     if (!_isInitialized) {
       return Scaffold(
-        backgroundColor: const Color(0xFF0F1115),
+        backgroundColor: backgroundColor,
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              const SafeStepLogo(size: 96),
+              const SizedBox(height: 28),
               const CircularProgressIndicator(color: primaryColor),
-              const SizedBox(height: 16),
+              const SizedBox(height: 18),
               Text(
-                _isHebrew ? 'מאתחל מערכת...' : 'Initializing...',
-                style: const TextStyle(color: Colors.white70),
+                _isHebrew ? 'מאתחל את SafeStep...' : 'Initializing SafeStep...',
+                style: const TextStyle(
+                  color: subTextColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),
@@ -516,48 +489,156 @@ class _MainScreenState extends State<MainScreen> {
       );
     }
 
-    final buttonText      = _isRunning
-        ? (_isHebrew ? 'עצור זיהוי' : 'Stop')
-        : (_isHebrew ? 'הפעל זיהוי' : 'Start');
-    final objectText      = _localizedObjectName();
-    final currentRiskScore = _currentMostDangerous?.riskScore;
-    final currentRiskColor = _riskColor(currentRiskScore);
-
     return Scaffold(
-      backgroundColor: const Color(0xFF0F1115),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0F1115),
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        title: const Text(
-          'Safe Step',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+      backgroundColor: backgroundColor,
+      body: Container(
+        // רקע הדרגתי לעיצוב מסך הבית.
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFFFAFAF6),
+              Color(0xFFF1F6F2),
+            ],
+          ),
         ),
-        actions: [
-          Padding(
-            padding: const EdgeInsetsDirectional.only(end: 8),
-            child: Material(
-              color: const Color(0xFF1B1F27),
-              borderRadius: BorderRadius.circular(12),
-              child: IconButton(
-                onPressed: _openSettings,
-                icon: const Icon(Icons.settings_rounded, color: Colors.white, size: 22),
-                padding: const EdgeInsets.all(8),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
+            child: Column(
+              children: [
+                _buildTopBar(),
+                const Spacer(flex: 2),
+                _buildLogoHeader(),
+                const SizedBox(height: 34),
+                _buildLargeStartButton(),
+                const Spacer(flex: 3),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopBar() {
+    return Row(
+      children: [
+        const Spacer(),
+        Semantics(
+          button: true,
+          label: _isHebrew ? 'פתח הגדרות' : 'Open settings',
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(28),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+              child: Container(
+                width: 88,
+                height: 88,
+                decoration: BoxDecoration(
+                  color: primaryColor,
+                  borderRadius: BorderRadius.circular(26),
+                  border: Border.all(
+                    color: Colors.green.withValues(alpha: 0.55),
+                    width: 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 16,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: IconButton(
+                  onPressed: _openSettings,
+                  iconSize: 44,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  icon: const Icon(
+                    Icons.settings_rounded,
+                    color: cardColor,
+                  ),
+                  tooltip: _isHebrew ? 'הגדרות' : 'Settings',
+                ),
               ),
             ),
           ),
-        ],
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLogoHeader() {
+    return Column(
+      children: [
+        const SafeStepLogo(size: 160),
+        const SizedBox(height: 12),
+        const Text(
+          'SafeStep',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: primaryColor,
+            fontSize: 38,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.8,
+          ),
+        ),
+        const SizedBox(height: 10),
+      ],
+    );
+  }
+
+  Widget _buildLargeStartButton() {
+    final isStop = _isRunning;
+    final buttonColor = isStop ? dangerColor : primaryColor;
+
+    return Semantics(
+      button: true,
+      label: isStop
+          ? (_isHebrew ? 'עצור זיהוי מכשולים' : 'Stop obstacle detection')
+          : (_isHebrew ? 'התחל זיהוי מכשולים' : 'Start obstacle detection'),
+      child: GestureDetector(
+        onTap: isStop ? _stopDetection : _startDetection,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOut,
+          width: double.infinity,
+          height: 250,
+          decoration: BoxDecoration(
+            color: buttonColor,
+            borderRadius: BorderRadius.circular(36),
+            boxShadow: [
+              BoxShadow(
+                color: buttonColor.withValues(alpha: 0.35),
+                blurRadius: 34,
+                offset: const Offset(0, 18),
+              ),
+            ],
+          ),
           child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildMainButton(buttonText),
-              const SizedBox(height: 16),
-              _buildDangerCard(objectText, currentRiskColor),
-              const SizedBox(height: 16),
-              _buildStatusRow(),
+              Icon(
+                isStop ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                color: const Color(0xFFFFF8EA),
+                size: 86,
+              ),
+              const SizedBox(height: 18),
+              Text(
+                isStop
+                    ? (_isHebrew ? 'עצור' : 'Stop')
+                    : (_isHebrew ? 'התחל זיהוי' : 'Start Detecting'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFFFFF8EA),
+                  fontSize: 38,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.5,
+                ),
+              ),
+
             ],
           ),
         ),
@@ -565,198 +646,16 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  // ── Widgets ──────────────────────────────────────────────
-
-  Widget _buildMainButton(String buttonText) {
-    return SizedBox(
-      width: double.infinity,
-      height: 120,
-      child: ElevatedButton(
-        onPressed: _isRunning ? _stopDetection : _startDetection,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: primaryColor,
-          foregroundColor: Colors.white,
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          textStyle: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              _isRunning ? Icons.stop_circle_rounded : Icons.play_circle_fill_rounded,
-              size: 40,
-            ),
-            const SizedBox(width: 16),
-            Text(buttonText),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDangerCard(String objectText, Color currentRiskColor) {
-    return _glassCard(
-      child: Column(
-        children: [
-          Text(
-            _isHebrew ? 'האובייקט המסוכן ביותר' : 'Most dangerous object',
-            style: const TextStyle(fontSize: 16, color: Colors.white70, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 16),
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            width: 88, height: 88,
-            decoration: BoxDecoration(
-              color: currentRiskColor.withOpacity(0.14),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(Icons.warning_amber_rounded, color: currentRiskColor, size: 46),
-          ),
-          const SizedBox(height: 18),
-          Text(
-            objectText,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold, color: Colors.white),
-          ),
-          const SizedBox(height: 18),
-          if (_currentMostDangerous != null) ...[
-            _buildMetricTile(
-              title: _isHebrew ? 'רמת סיכון' : 'Risk level',
-              value: _localizedRiskLevel(_currentMostDangerous!.riskScore),
-              valueColor: currentRiskColor,
-              icon: Icons.shield_rounded,
-            ),
-            const SizedBox(height: 10),
-            _buildMetricTile(
-              title: _isHebrew ? 'רמת זיהוי' : 'Detection confidence',
-              value: '${(_currentMostDangerous!.confidence * 100).toStringAsFixed(0)}%',
-              icon: Icons.analytics_rounded,
-            ),
-            const SizedBox(height: 10),
-            _buildMetricTile(
-              title: _isHebrew ? 'ניקוד סיכון' : 'Risk score',
-              value: _currentMostDangerous!.riskScore.toStringAsFixed(1),
-              icon: Icons.bar_chart_rounded,
-            ),
-          ] else ...[
-            Text(
-              _isHebrew
-                  ? 'המערכת ממתינה לזיהוי חדש.'
-                  : 'The system is waiting for a new detection.',
-              style: const TextStyle(fontSize: 15, color: Colors.white70),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatusRow() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF171B22),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.vibration, size: 18,
-                color: _vibrationEnabled ? const Color(0xFFBA68C8) : Colors.grey.withOpacity(0.4)),
-            const SizedBox(width: 6),
-            Text(
-              _isHebrew
-                  ? 'רטט: ${_vibrationEnabled ? "פעיל" : "כבוי"}'
-                  : 'Vib: ${_vibrationEnabled ? "On" : "Off"}',
-              style: const TextStyle(fontSize: 13, color: Colors.white),
-            ),
-          ]),
-          Container(width: 1, height: 20, color: Colors.white.withOpacity(0.2)),
-          Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(
-              Icons.mic_rounded,
-              size: 18,
-              color: _voiceService.isListening ? const Color(0xFF66BB6A) : Colors.grey.withOpacity(0.4),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              _isHebrew
-                  ? 'קול: ${_voiceService.isListening ? "מאזין" : "כבוי"}'
-                  : 'Mic: ${_voiceService.isListening ? "On" : "Off"}',
-              style: const TextStyle(fontSize: 13, color: Colors.white),
-            ),
-          ]),
-          Container(width: 1, height: 20, color: Colors.white.withOpacity(0.2)),
-          Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.language_rounded, size: 18, color: Color(0xFF64B5F6)),
-            const SizedBox(width: 6),
-            Text(
-              _isHebrew ? 'שפה: עברית' : 'Lang: English',
-              style: const TextStyle(fontSize: 13, color: Colors.white),
-            ),
-          ]),
-        ],
-      ),
-    );
-  }
-
-  Widget _glassCard({required Widget child}) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF171B22),
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.22), blurRadius: 18, offset: const Offset(0, 10)),
-        ],
-      ),
-      child: child,
-    );
-  }
-
-  Widget _buildMetricTile({
-    required String title,
-    required String value,
-    required IconData icon,
-    Color valueColor = Colors.white,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 42, height: 42,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(icon, color: primaryColor, size: 22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(child: Text(title,
-              style: const TextStyle(fontSize: 15, color: Colors.white70, fontWeight: FontWeight.w500))),
-          Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: valueColor)),
-        ],
-      ),
-    );
-  }
 }
+
 
 // ════════════════════════════════════════════════════════
 // ENUMS
 // ════════════════════════════════════════════════════════
 
 enum _AlertLevel {
-  none,           // < 30: שקט לגמרי
-  vibrationOnly,  // 30–40: רטט בלבד
-  voiceOnly,      // 40–65: רטט + קול
-  beepAndVoice,   // 65+: רטט + צפצוף + קול
+  none,           // ללא התראה.
+  vibrationOnly,  // רטט בלבד.
+  voiceOnly,      // התראה קולית.
+  beepAndVoice,   // צפצוף והתראה קולית.
 }
