@@ -1,16 +1,97 @@
-# final_project
+# 🛡️ SafeStep
 
-A new Flutter project.
+**אפליקציית סיוע בניווט לאנשים עם לקויות ראייה** — זיהוי מכשולים בזמן אמת באמצעות מצלמת הטלפון, עם התראות קוליות, רטט ופקודות קוליות.
 
-## Getting Started
+## 📱 מה האפליקציה עושה
 
-This project is a starting point for a Flutter application.
+SafeStep משתמשת במצלמת הטלפון כדי לזהות מכשולים ואובייקטים בסביבת המשתמש בזמן אמת.  
+לכל אובייקט מחושב **ציון סיכון** (0–100) לפי 6 פקטורים, והמשתמש מקבל **התראה מותאמת** — רטט, דיבור, או שניהם — לפי רמת הסכנה.
 
-A few resources to get you started if this is your first Flutter project:
+### אובייקטים מזוהים
+`מכונית` · `אופנוע` · `עמוד` · `אדם` · `ספסל` · `ספה` · `מעבר חציה`
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+### רמות התראה
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+| ציון סיכון | סוג התראה |
+|-----------|-----------|
+| < 20 | שקט |
+| 20–30 | רטט בלבד |
+| 30–65 | רטט + קול |
+| 65+ | רטט + צפצוף + קול |
+
+## 🏗️ ארכיטקטורה
+
+הפרויקט בנוי בגישת **Service-Oriented Architecture** — כל שירות הוא מחלקה עצמאית:
+
+```
+lib/
+├── main.dart                      # נקודת כניסה + MaterialApp
+├── models/
+│   └── detection.dart             # מודל נתונים: Detection
+├── screens/
+│   ├── main_screen.dart           # מסך ראשי — תזמורן השירותים
+│   └── settings_screen.dart       # מסך הגדרות
+├── services/
+│   ├── alert_service.dart         # התראות קוליות (TTS)
+│   ├── camera_service.dart        # ניהול מצלמה והזרמת פריימים
+│   ├── cooldown_manager.dart      # מניעת הצפת התראות
+│   ├── display_manager.dart       # ניהול עדכון תצוגה
+│   ├── risk_scoring_service.dart  # אלגוריתם חישוב סיכון (6 פקטורים)
+│   ├── vosk_command_service.dart  # פקודות קוליות (offline)
+│   └── yolo_service.dart          # הרצת מודל YOLO (TFLite)
+├── utils/
+│   ├── app_colors.dart            # קבועי עיצוב
+│   └── logger.dart                # לוגר מרוכז (AppLogger)
+└── widgets/
+    └── safestep_logo.dart         # ווידג'ט לוגו
+```
+
+## ⚙️ טכנולוגיות
+
+| טכנולוגיה | שימוש |
+|-----------|-------|
+| Flutter (Dart) | פיתוח האפליקציה |
+| YOLOv8 (TFLite) | זיהוי אובייקטים (CPU, 2 threads) |
+| Flutter TTS | המרת טקסט לדיבור |
+| Vosk | זיהוי פקודות קוליות (offline) |
+| Sensors Plus | אקסלרומטר — זיהוי תנועת משתמש |
+| Vibration | התראות רטט |
+
+## 🎤 פקודות קוליות
+
+| פקודה | פעולה |
+|-------|-------|
+| `start` | התחלת זיהוי |
+| `stop` | עצירת זיהוי |
+| `settings` | פתיחת הגדרות |
+| `help` | בדיקת קול |
+| `repeat` | חזרה על ההתראה האחרונה |
+| `vibration on/off` | הפעלה/כיבוי רטט |
+
+## 🌐 שפות נתמכות
+
+- עברית (ברירת מחדל)
+- אנגלית
+
+## 🚀 התקנה והרצה
+
+```bash
+# התקנת dependencies
+flutter pub get
+
+# הרצה על מכשיר אנדרואיד
+flutter run
+
+# יצירת APK
+flutter build apk
+```
+
+### דרישות
+- Flutter SDK ^3.10.4
+- מכשיר אנדרואיד עם מצלמה
+- הרשאות: מצלמה, מיקרופון
+
+## 👥 מפתחים
+
+- **יוסף לניאדו**
+- **שחר אטיאס**

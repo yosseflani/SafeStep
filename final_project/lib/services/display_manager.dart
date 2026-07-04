@@ -2,7 +2,7 @@
 class DisplayManager {
 
   /// זמן תחילת התצוגה של האובייקט הנוכחי.
-  DateTime? currentDisplayStartTime;
+  DateTime? _currentDisplayStartTime;
 
   /// משך זמן מינימלי להצגת אובייקט לפני החלפה.
   static const minDisplayDuration = Duration(seconds: 2);
@@ -21,12 +21,12 @@ class DisplayManager {
       return true;
     }
 
-    if (currentDisplayStartTime == null) {
+    if (_currentDisplayStartTime == null) {
       return true;
     }
 
     final timeSinceDisplayStart =
-    DateTime.now().difference(currentDisplayStartTime!);
+    DateTime.now().difference(_currentDisplayStartTime!);
 
     final riskDifference = (newRisk ?? 0) - (currentRisk ?? 0);
 
@@ -43,11 +43,11 @@ class DisplayManager {
 
   /// מסמן התחלה של הצגת אובייקט חדש.
   void markDisplayStart() {
-    currentDisplayStartTime = DateTime.now();
+    _currentDisplayStartTime = DateTime.now();
   }
 
   /// מאפס את מצב התצוגה הפעיל.
   void clearDisplayStart() {
-    currentDisplayStartTime = null;
+    _currentDisplayStartTime = null;
   }
 }

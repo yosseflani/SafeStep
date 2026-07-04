@@ -1,11 +1,11 @@
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
-
 import '../models/detection.dart';
+import '../utils/logger.dart';
 
 /// שירות לחישוב ציון סיכון עבור אובייקטים שזוהו.
 class RiskScoringService {
+  final _log = const AppLogger('RiskScoring');
   double _imageWidth = 640;
   double _imageHeight = 480;
 
@@ -114,7 +114,7 @@ class RiskScoringService {
         isApproaching: isApproaching,
       );
     } catch (e, stack) {
-      _debug('score error for ${detection.tag}: $e\n$stack');
+      _log.debug('score error for ${detection.tag}: $e\n$stack');
 
       return detection.copyWith(
         riskScore: 30.0,
@@ -218,19 +218,6 @@ class RiskScoringService {
     _lastCleanup = now;
   }
 
-  /// מדפיס לוגים במצב פיתוח בלבד.
-  void _debug(String msg) {
-    if (!kDebugMode) return;
-
-    final time = DateTime.now()
-        .toIso8601String()
-        .split('T')
-        .last
-        .split('.')
-        .first;
-
-    debugPrint('[RiskScoring][$time] $msg');
-  }
 }
 
 /// משקלים לחישוב ציון הסיכון.

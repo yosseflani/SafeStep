@@ -1,13 +1,13 @@
-import 'package:flutter/foundation.dart';
-
 import 'package:flutter_tts/flutter_tts.dart';
 
 import '../models/detection.dart';
+import '../utils/logger.dart';
 
 /// שירות לניהול התרעות קוליות באפליקציה.
 class AlertService {
   // מנוע הדיבור של המכשיר.
   final FlutterTts _tts = FlutterTts();
+  final _log = const AppLogger('AlertService');
 
   // הגדרות דיבור והתראות.
   String _language = 'he-IL';
@@ -50,7 +50,7 @@ class AlertService {
     // ממתין לסיום ההקראה לפני המשך הריצה.
     await _tts.awaitSpeakCompletion(true);
 
-    _debug('initialized: lang=$_language, rate=$_speechRate');
+    _log.debug('initialized: lang=$_language, rate=$_speechRate');
   }
 
   /// מעדכן את הגדרות הדיבור בזמן ריצה.
@@ -69,17 +69,17 @@ class AlertService {
 
     await _tts.setSpeechRate(_speechRate);
 
-    _debug('settings updated: lang=$_language, rate=$_speechRate');
+    _log.debug('settings updated: lang=$_language, rate=$_speechRate');
   }
 
   /// רושם מאזינים לאירועי מנוע הדיבור.
   void _registerHandlers() {
     _tts.setCompletionHandler(() {
-      _debug('speech completed');
+      _log.debug('speech completed');
     });
 
     _tts.setErrorHandler((msg) {
-      _debug('speech error: $msg');
+      _log.debug('speech error: $msg');
 
       _resetSpeakingState();
 
@@ -87,7 +87,7 @@ class AlertService {
     });
 
     _tts.setCancelHandler(() {
-      _debug('speech cancelled');
+      _log.debug('speech cancelled');
 
       _resetSpeakingState();
     });
@@ -115,6 +115,11 @@ class AlertService {
     await _speakSystemMessage(
       _isHebrew ? 'זוהי בדיקת קול' : 'This is a voice test',
     );
+  }
+
+  /// מקריא טקסט חופשי.
+  Future<void> speakFreeText(String text) async {
+    await _speakSystemMessage(text);
   }
 
   /// מנסה להקריא התרעה עבור אובייקט שזוהה.
@@ -153,7 +158,7 @@ class AlertService {
 
     _pendingHighPriorityAlert = null;
 
-    _debug('stopped');
+    _log.debug('stopped');
   }
 
   /// מאפס את מצב הדיבור והתור ללא עצירת TTS.
@@ -199,13 +204,13 @@ class AlertService {
     _speakingStartTime = DateTime.now();
 
     try {
-      _debug('speaking "$message" ($debugContext)');
+      _log.debug('speaking "$message" ($debugContext)');
 
       await _tts.speak(message);
 
       return true;
     } catch (e) {
-      _debug('speak failed: $e');
+      _log.debug('speak failed: $e');
 
       return false;
     } finally {
@@ -221,7 +226,7 @@ class AlertService {
   Future<void> _recoverIfSpeechIsStuck() async {
     if (!_isSpeakingStuck()) return;
 
-    _debug('speech stuck, resetting');
+    _log.debug('speech stuck, resetting');
 
     await _tts.stop();
 
@@ -252,11 +257,11 @@ class AlertService {
     if (risk > currentPendingRisk) {
       _pendingHighPriorityAlert = detection.copyWith(riskScore: risk);
 
-      _debug(
+      _log.debug(
         'queued high priority: ${detection.tag}, risk=${risk.toStringAsFixed(1)}',
       );
     } else {
-      _debug(
+      _log.debug(
         'ignored lower priority: ${detection.tag}, risk=${risk.toStringAsFixed(1)}',
       );
     }
@@ -283,10 +288,10 @@ class AlertService {
       final result = await _tts.setLanguage(language);
 
       if (result != 1) {
-        _debug('language may not be fully supported: $language');
+        _log.debug('language may not be fully supported: $language');
       }
     } catch (e) {
-      _debug('language error, falling back to en-US: $e');
+      _log.debug('language error, falling back to en-US: $e');
 
       _language = 'en-US';
 
@@ -303,11 +308,7 @@ class AlertService {
     return '${_localizedLabel(detection.tag)} ${_severityText(riskScore)}';
   }
 
-  /// מחזיר שם אובייקט מתורגם.
-  String localizedLabel(String tag) => _localizedLabel(tag);
 
-  /// מחזיר טקסט חומרה לפי ציון סיכון.
-  String severityText(double riskScore) => _severityText(riskScore);
 
   /// מציין האם שפת המערכת היא עברית.
   bool get _isHebrew => _language.startsWith('he');
@@ -356,17 +357,4 @@ class AlertService {
     return 'around';
   }
 
-  /// מדפיס לוגים במצב פיתוח בלבד.
-  void _debug(String msg) {
-    if (!kDebugMode) return;
-
-    final time = DateTime.now()
-        .toIso8601String()
-        .split('T')
-        .last
-        .split('.')
-        .first;
-
-    debugPrint('[AlertService][$time] $msg');
-  }
 }

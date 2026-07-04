@@ -64,7 +64,7 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/images/logo.png"
+  image_path: "assets/images/logo_drawing.png"
 
 
 # For information on the generic Dart part of this file, see the
@@ -79,8 +79,6 @@ flutter:
   uses-material-design: true
 
   assets:
-    #- assets/yolov8n_float32.tflite
-    #- assets/labels.txt
     - assets/models/vosk-model-small-en-us-0.15.zip
     - assets/safestep_yolo.tflite
     - assets/safestep_labels.txt

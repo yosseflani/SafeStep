@@ -1,11 +1,12 @@
 import 'package:camera/camera.dart';
-
 import 'package:flutter/foundation.dart';
-
 import 'package:permission_handler/permission_handler.dart';
+
+import '../utils/logger.dart';
 
 /// שירות לניהול המצלמה והזרמת פריימים לזיהוי.
 class CameraService {
+  final _log = const AppLogger('CameraService');
 
   // בקר המצלמה הפעיל.
   CameraController? _controller;
@@ -45,7 +46,7 @@ class CameraService {
   Future<void> initialize({
     ResolutionPreset preset = ResolutionPreset.low,
   }) async {
-    _debug('initialize() | preset=$preset');
+    _log.debug('initialize() | preset=$preset');
 
     if (_isInitialized) return;
 
@@ -85,12 +86,12 @@ class CameraService {
 
       _isInitialized = true;
 
-      _debug('Camera initialized successfully');
+      _log.debug('Camera initialized successfully');
     } on CameraException catch (e) {
       _controller = null;
       _isInitialized = false;
 
-      _debug('CameraException: ${e.code} - ${e.description}');
+      _log.debug('CameraException: ${e.code} - ${e.description}');
 
       throw Exception('Camera error: ${e.description}');
     } catch (_) {
@@ -124,7 +125,7 @@ class CameraService {
             (_skippedFrames / _frameCounter * 100)
                 .toStringAsFixed(1);
 
-            _debug(
+            _log.debug(
               'frame=$_frameCounter | '
                   'skipped=$_skippedFrames ($skippedRate%)',
             );
@@ -138,21 +139,21 @@ class CameraService {
         try {
           await onFrame(image);
         } catch (e, stack) {
-          _debug('onFrame error: $e\n$stack');
+          _log.debug('onFrame error: $e\n$stack');
         } finally {
           _isProcessing = false;
         }
       },
     );
 
-    _debug('Camera stream started');
+    _log.debug('Camera stream started');
   }
 
   /// עוצר את הזרמת הפריימים.
   Future<void> stopStream() async {
     if (_controller?.value.isStreamingImages == true) {
       await _controller!.stopImageStream();
-      _debug('Camera stream stopped');
+      _log.debug('Camera stream stopped');
     }
   }
 
@@ -164,7 +165,7 @@ class CameraService {
 
   /// משחרר את משאבי המצלמה.
   Future<void> dispose() async {
-    _debug('dispose()');
+    _log.debug('dispose()');
 
     await stopStream();
     await _controller?.dispose();
@@ -176,17 +177,4 @@ class CameraService {
     resetStats();
   }
 
-  /// מדפיס לוגים במצב פיתוח בלבד.
-  void _debug(String message) {
-    if (!kDebugMode) return;
-
-    final time = DateTime.now()
-        .toIso8601String()
-        .split('T')
-        .last
-        .split('.')
-        .first;
-
-    debugPrint('[CameraService][$time] $message');
-  }
 }

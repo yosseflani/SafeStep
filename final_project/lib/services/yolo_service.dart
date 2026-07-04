@@ -4,14 +4,17 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_vision/flutter_vision.dart';
 
 import '../models/detection.dart';
+import '../utils/logger.dart';
 
 /// שירות לזיהוי אובייקטים באמצעות מודל YOLO.
 class YoloService {
   // מופע הספרייה שמריצה את מודל הזיהוי.
   final FlutterVision _vision = FlutterVision();
+  final _log = const AppLogger('YoloService');
 
   // מציין האם המודל נטען ומוכן לשימוש.
-  bool isLoaded = false;
+  bool _isLoaded = false;
+  bool get isLoaded => _isLoaded;
 
   // ספי הזיהוי של המודל.
   static const double _iouThreshold = 0.4;
@@ -31,10 +34,10 @@ class YoloService {
 
   /// טוען את מודל YOLO וקובץ התוויות.
   Future<void> initModel() async {
-    _debug('initModel()');
+    _log.debug('initModel()');
 
-    if (isLoaded) {
-      _debug('Model already loaded');
+    if (_isLoaded) {
+      _log.debug('Model already loaded');
       return;
     }
 
@@ -47,13 +50,13 @@ class YoloService {
         useGpu: false,
       );
 
-      isLoaded = true;
+      _isLoaded = true;
 
-      _debug('Model loaded successfully');
+      _log.debug('Model loaded successfully');
     } catch (e, stack) {
-      isLoaded = false;
+      _isLoaded = false;
 
-      _debug('Model load failed: $e\n$stack');
+      _log.debug('Model load failed: $e\n$stack');
       rethrow;
     }
   }
@@ -67,7 +70,7 @@ class YoloService {
         double? confThreshold,
       }) async {
     if (!isLoaded || bytesList.isEmpty || imageHeight <= 0 || imageWidth <= 0) {
-      _debug('Invalid input or model not loaded');
+      _log.debug('Invalid input or model not loaded');
       return const [];
     }
 
@@ -130,7 +133,7 @@ class YoloService {
       }
 
       if (kDebugMode && results.isNotEmpty) {
-        _debug(
+        _log.debug(
           'raw=${results.length} accepted=${detections.length} '
               '(filtered: tag=$filteredByTag '
               'conf=$filteredByConf box=$filteredByBox)',
@@ -139,7 +142,7 @@ class YoloService {
 
       return detections;
     } catch (e, stack) {
-      _debug('Detection error: $e\n$stack');
+      _log.debug('Detection error: $e\n$stack');
       return const [];
     }
   }
@@ -150,11 +153,11 @@ class YoloService {
 
     try {
       await _vision.closeYoloModel();
-      isLoaded = false;
+      _isLoaded = false;
 
-      _debug('Model closed');
+      _log.debug('Model closed');
     } catch (e, stack) {
-      _debug('Dispose error: $e\n$stack');
+      _log.debug('Dispose error: $e\n$stack');
     }
   }
 
@@ -167,17 +170,4 @@ class YoloService {
     'allowedTagsCount': allowedTags.length,
   };
 
-  /// מדפיס לוגים במצב פיתוח בלבד.
-  void _debug(String msg) {
-    if (!kDebugMode) return;
-
-    final time = DateTime.now()
-        .toIso8601String()
-        .split('T')
-        .last
-        .split('.')
-        .first;
-
-    debugPrint('[YoloService][$time] $msg');
-  }
 }

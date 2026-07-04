@@ -3,21 +3,17 @@ import 'package:flutter/material.dart';
 import '../utils/app_colors.dart';
 
 class SettingsScreen extends StatefulWidget {
-  final List<Map<String, dynamic>> voices;
   final double speechRate;
   final bool vibrationEnabled;
   final String language;
-  final String? selectedVoice;
   final Future<void> Function()? onVoiceTest;
-  final Function(double, bool, String, String?) onChanged;
+  final Function(double, bool, String) onChanged;
 
   const SettingsScreen({
     super.key,
     required this.speechRate,
     required this.vibrationEnabled,
     required this.language,
-    required this.voices,
-    required this.selectedVoice,
     required this.onChanged,
     this.onVoiceTest,
   });
@@ -61,7 +57,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // מודיע למסך הראשי על שינוי בהגדרות.
   void _notifyChanged() {
-    widget.onChanged(rate, vibration, lang, null);
+    widget.onChanged(rate, vibration, lang);
   }
 
   @override
@@ -73,14 +69,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         body: Container(
           // רקע הדרגתי למסך ההגדרות.
           decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Color(0xFFFAFAF6),
-                Color(0xFFF1F6F2),
-              ],
-            ),
+            gradient: backgroundGradient,
           ),
           child: SafeArea(
             child: Padding(
@@ -322,7 +311,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             vibration = true;
             lang = 'he-IL';
           });
-          widget.onChanged(0.5, true, 'he-IL', null);
+          widget.onChanged(0.5, true, 'he-IL');
         },
         icon: const Icon(Icons.refresh_rounded, size: 26),
         label: Text(

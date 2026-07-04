@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'screens/main_screen.dart';
+import 'utils/app_colors.dart';
 
 /// נקודת הכניסה של האפליקציה.
 void main() async {
@@ -39,20 +40,16 @@ class SafeStep extends StatelessWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
 
-      // שימוש קבוע בערכת נושא כהה.
-      themeMode: ThemeMode.dark,
+
 
       theme: ThemeData(
         useMaterial3: true,
 
-        brightness: Brightness.dark,
+        scaffoldBackgroundColor: backgroundColor,
 
-        scaffoldBackgroundColor: const Color(0xFF0F1115),
-
-        // יצירת סכמת צבעים המבוססת על צבע ראשי.
+        // סכמת צבעים מותאמת לערכת הצבעים הראשית.
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFF7A00),
-          brightness: Brightness.dark,
+          seedColor: primaryColor,
         ),
       ),
 

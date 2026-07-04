@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:vosk_flutter/vosk_flutter.dart';
+
+import '../utils/logger.dart';
 
 /// שירות לזיהוי פקודות קוליות באמצעות Vosk.
 class VoskCommandService {
+  final _log = const AppLogger('VoskCommand');
   // קצב הדגימה הנדרש למודל הזיהוי.
   static const int _sampleRate = 16000;
 
@@ -32,7 +34,7 @@ class VoskCommandService {
 
   /// טוען את מודל Vosk ומכין את שירות הזיהוי.
   Future<bool> initialize() async {
-    _debug('initialize()');
+    _log.debug('initialize()');
 
     try {
       final modelPath = await _modelLoader.loadFromAssets(_modelAssetPath);
@@ -49,11 +51,7 @@ class VoskCommandService {
           'stop',
           'help',
           'repeat',
-          'home',
-          'emergency',
           'settings',
-          'yes',
-          'no',
           'vibration on',
           'vibration off',
         ],
@@ -63,10 +61,10 @@ class VoskCommandService {
 
       _isInitialized = true;
 
-      _debug('Vosk initialized successfully');
+      _log.debug('Vosk initialized successfully');
       return true;
     } catch (e) {
-      _debug('initialize error: $e');
+      _log.debug('initialize error: $e');
       return false;
     }
   }
@@ -74,12 +72,12 @@ class VoskCommandService {
   /// מתחיל האזנה לפקודות קוליות.
   Future<void> startListening(Function(String command) onCommand) async {
     if (!_isInitialized || _speechService == null) {
-      _debug('Vosk is not initialized');
+      _log.debug('Vosk is not initialized');
       return;
     }
 
     if (_isListening) {
-      _debug('already listening');
+      _log.debug('already listening');
       return;
     }
 
@@ -98,7 +96,7 @@ class VoskCommandService {
 
     _isListening = true;
 
-    _debug('listening started');
+    _log.debug('listening started');
   }
 
   /// עוצר את ההאזנה ומשחרר את מנוי התוצאות.
@@ -112,7 +110,7 @@ class VoskCommandService {
 
     _isListening = false;
 
-    _debug('listening stopped');
+    _log.debug('listening stopped');
   }
 
   /// מנקה משאבי האזנה פעילים.
@@ -137,10 +135,4 @@ class VoskCommandService {
     }
   }
 
-  /// מדפיס לוגים במצב פיתוח בלבד.
-  void _debug(String msg) {
-    if (!kDebugMode) return;
-
-    debugPrint('[VoskCommandService] $msg');
-  }
 }

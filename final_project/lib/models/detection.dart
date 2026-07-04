@@ -81,4 +81,8 @@ class Detection {
       riskScore.hashCode ^
       isApproaching.hashCode ^
       Object.hashAll(box);
+
+  @override
+  String toString() =>
+      'Detection(tag: $tag, risk: ${riskScore.toStringAsFixed(1)}, approaching: $isApproaching)';
 }

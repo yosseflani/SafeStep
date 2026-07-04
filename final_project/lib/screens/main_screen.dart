@@ -1,8 +1,6 @@
 import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:vibration/vibration.dart';
 import 'dart:math';
 import 'dart:async';
@@ -19,6 +17,7 @@ import '../services/vosk_command_service.dart';
 import '../services/display_manager.dart';
 import 'settings_screen.dart';
 import '../utils/app_colors.dart';
+import '../utils/logger.dart';
 import '../widgets/safestep_logo.dart';
 
 class MainScreen extends StatefulWidget {
@@ -28,7 +27,7 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   // ── שירותי המערכת המרכזיים ───────────────────────────────
   final CameraService _cameraService = CameraService();
@@ -36,21 +35,9 @@ class _MainScreenState extends State<MainScreen> {
   final RiskScoringService _riskScoringService = RiskScoringService();
   final CooldownManager _cooldownManager = CooldownManager();
   final AlertService _alertService = AlertService();
-  final FlutterTts _tts = FlutterTts();
   final DisplayManager _displayManager = DisplayManager();
   final VoskCommandService _voiceService = VoskCommandService();
-
-  // מונע עיבוד מקביל של כמה פריימים בו־זמנית.
-  bool _isProcessingFrame = false;
-
-  // לוג פנימי לפיתוח בלבד.
-  void _debug(String message, [Object? error, StackTrace? stackTrace]) {
-    if (!kDebugMode) return;
-    final time = DateTime.now().toIso8601String().split('T').last.split('.').first;
-    debugPrint('[SafeStep][$time] $message');
-    if (error != null) debugPrint('[SafeStep][$time][ERROR] $error');
-    if (stackTrace != null) debugPrint('[SafeStep][$time][STACK] $stackTrace');
-  }
+  final _log = const AppLogger('SafeStep');
 
   // ── ניהול רטט ────────────────────────────────────────────
   DateTime? _lastVibrationTime;
@@ -71,8 +58,6 @@ class _MainScreenState extends State<MainScreen> {
   double _speechRate = 0.5;
   bool _vibrationEnabled = true;
   String _language = 'he-IL';
-  String? _selectedVoice;
-  List<Map<String, dynamic>> _voices = [];
 
   // האובייקט המסוכן ביותר שמוצג כרגע.
   Detection? _currentMostDangerous;
@@ -80,9 +65,9 @@ class _MainScreenState extends State<MainScreen> {
   bool get _isHebrew => _language.startsWith('he');
 
   // ── ספי התראה לפי רמת סיכון ─────────────────────────────
-  // < 30  → שקט
-  // 30–40 → רטט בלבד
-  // 40–65 → רטט + קול
+  // < 20  → שקט
+  // 20–30 → רטט בלבד
+  // 30–65 → רטט + קול
   // 65+   → רטט + צפצוף + קול
   static const _vibrationOnlyThreshold = 20.0;
   static const _voiceAlertThreshold    = 30.0;
@@ -95,12 +80,21 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeSystem();
+  }
+
+  // עוצר שירותים כשהאפליקציה עוברת לרקע.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused && _isRunning) {
+      _stopDetection();
+    }
   }
 
   Future<void> _initializeSystem() async {
     try {
-      _debug('System initialization started');
+      _log.debug('System initialization started');
 
       // אתחול מקביל של שירותי הליבה.
       final results = await Future.wait([
@@ -115,7 +109,7 @@ class _MainScreenState extends State<MainScreen> {
       ]);
 
       final bool voiceAvailable = results[2] as bool;
-      _debug('Voice recognition available: $voiceAvailable');
+      _log.debug('Voice recognition available: $voiceAvailable');
 
       // עדכון רזולוציית התמונה עבור חישוב סיכון מדויק.
       final controller = _cameraService.controller;
@@ -126,9 +120,6 @@ class _MainScreenState extends State<MainScreen> {
         );
       }
 
-      // טעינת קולות זמינים והחלת הגדרות דיבור.
-      final raw = await _tts.getVoices ?? [];
-      _voices = raw.whereType<Map<String, dynamic>>().toList();
       await _applyTtsSettings();
 
       if (!mounted) return;
@@ -150,9 +141,9 @@ class _MainScreenState extends State<MainScreen> {
 
       await _resumeListening();
 
-      _debug('Initialization completed');
+      _log.debug('Initialization completed');
     } catch (e, stack) {
-      _debug('Initialization failed', e, stack);
+      _log.debug('Initialization failed', e, stack);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -174,21 +165,13 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _applyTtsSettings() async {
     try {
-      // מחיל שפה, מהירות וקול נבחר עבור מנוע הדיבור.
-      await _tts.setLanguage(_language);
-      await _tts.setSpeechRate(_speechRate.clamp(0.1, 2.0));
-      if (_selectedVoice != null) {
-        await _tts.setVoice({'name': _selectedVoice!});
-      }
-
-      // מסנכרן את שירות ההתראות עם הגדרות הדיבור.
       await _alertService.updateSettings(
         language: _language,
         speechRate: _speechRate,
         voiceAlertsEnabled: true,
       );
     } catch (e) {
-      _debug('TTS settings error', e);
+      _log.debug('TTS settings error', e);
     }
   }
 
@@ -210,7 +193,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _handleVoiceCommand(String command) {
-    _debug('Voice command: "$command"');
+    _log.debug('Voice command: "$command"');
 
     final text = command.toLowerCase().trim();
 
@@ -231,7 +214,7 @@ class _MainScreenState extends State<MainScreen> {
       if (_currentMostDangerous != null) {
         _alertService.trySpeakDetection(_currentMostDangerous!);
       } else {
-        _tts.speak(_isHebrew ? 'אין אובייקט מסוכן כרגע' : 'No dangerous object detected');
+        _alertService.speakFreeText(_isHebrew ? 'אין אובייקט מסוכן כרגע' : 'No dangerous object detected');
       }
     } else if (text == 'vibration on') {
       setState(() => _vibrationEnabled = true);
@@ -258,8 +241,7 @@ class _MainScreenState extends State<MainScreen> {
     setState(() => _isRunning = true);
 
     await _cameraService.startStream((CameraImage image) async {
-      if (!_isRunning || _isProcessingFrame) return;
-      _isProcessingFrame = true;
+      if (!_isRunning) return;
 
       try {
         // המרת פריים מהמצלמה לקלט עבור מודל הזיהוי.
@@ -325,9 +307,7 @@ class _MainScreenState extends State<MainScreen> {
         await _resumeListening();
 
       } catch (e, stack) {
-        _debug('Frame processing error', e, stack);
-      } finally {
-        _isProcessingFrame = false;
+        _log.debug('Frame processing error', e, stack);
       }
     });
   }
@@ -380,7 +360,7 @@ class _MainScreenState extends State<MainScreen> {
       await Vibration.vibrate(duration: duration);
       _lastVibrationTime = now;
     } catch (e) {
-      _debug('Vibration error', e);
+      _log.debug('Vibration error', e);
     }
   }
 
@@ -420,18 +400,15 @@ class _MainScreenState extends State<MainScreen> {
           speechRate: _speechRate,
           vibrationEnabled: _vibrationEnabled,
           language: _language,
-          voices: _voices,
-          selectedVoice: _selectedVoice,
           onVoiceTest: () async {
             await _applyTtsSettings();
             await _alertService.speakVoiceTest();
           },
-          onChanged: (speechRate, vibrationEnabled, language, selectedVoice) async {
+          onChanged: (speechRate, vibrationEnabled, language) async {
             // שמירת הגדרות המשתמש ועדכון שירותי הדיבור.
             _speechRate       = speechRate;
             _vibrationEnabled = vibrationEnabled;
             _language         = language;
-            _selectedVoice    = selectedVoice;
             await _applyTtsSettings();
             if (mounted) setState(() {});
           },
@@ -447,12 +424,12 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // שחרור משאבים והפסקת שירותים פעילים.
     _accelerometerSubscription?.cancel();
     _cameraService.dispose();
     _yoloService.dispose();
     _alertService.stop();
-    _tts.stop();
     _voiceService.stopListening();
     super.dispose();
   }
@@ -494,14 +471,7 @@ class _MainScreenState extends State<MainScreen> {
       body: Container(
         // רקע הדרגתי לעיצוב מסך הבית.
         decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFFFAFAF6),
-              Color(0xFFF1F6F2),
-            ],
-          ),
+          gradient: backgroundGradient,
         ),
         child: SafeArea(
           child: Padding(
